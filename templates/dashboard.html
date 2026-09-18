@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NR7 Demo Agent</title>
+<style>
+:root{color-scheme:dark;--bg:#070b14;--panel:#0f172a;--panel2:#111827;--border:#243045;--text:#e5e7eb;--muted:#94a3b8;--good:#34d399;--bad:#fb7185;--warn:#fbbf24;--accent:#60a5fa;--accent2:#2563eb}
+*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:linear-gradient(180deg,#0b1220 0,#070b14 260px);color:var(--text)}button,input,select{font:inherit}.wrap{width:min(1500px,100%);margin:0 auto;padding:20px}.top{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}.brand h1{font-size:24px;margin:0 0 4px}.brand p{margin:0;color:var(--muted);font-size:13px}.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;color:white;background:#172033}.btn.start{background:#063c2b;border-color:#0f6b4a;color:#a7f3d0}.btn.stop{background:#47161f;border-color:#7f1d1d;color:#fecdd3}.btn.secondary{background:#111827}.btn:disabled{opacity:.5;cursor:not-allowed}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:999px;padding:7px 11px;font-size:12px;font-weight:800}.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}.pill.good .dot{background:var(--good);box-shadow:0 0 10px rgba(52,211,153,.5)}.pill.bad .dot{background:var(--bad)}.pill.warn .dot{background:var(--warn)}.warning{background:#3a1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;margin-bottom:15px;font-size:13px}.errorbar{display:none;background:#3a1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;margin-bottom:15px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.stat{background:rgba(15,23,42,.92);border:1px solid var(--border);border-radius:14px;padding:14px;min-width:0}.stat .k{color:var(--muted);font-size:12px;margin-bottom:8px}.stat .v{font-weight:850;font-size:22px;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stat .s{color:var(--muted);font-size:11px;margin-top:5px}.good{color:var(--good)}.bad{color:var(--bad)}.warnc{color:var(--warn)}.section{margin-top:18px;background:rgba(15,23,42,.75);border:1px solid var(--border);border-radius:16px;overflow:hidden}.section-head{padding:15px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.section-head h2{font-size:16px;margin:0}.section-head .meta{font-size:12px;color:var(--muted)}.cards{padding:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.trade{background:#0b1220;border:1px solid #263247;border-radius:13px;padding:14px}.trade-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.symbol{font-weight:900;font-size:17px}.status{font-size:11px;padding:5px 8px;border-radius:999px;font-weight:900}.status.open{background:#083c2d;color:#a7f3d0}.status.win{background:#083c2d;color:#a7f3d0}.status.loss{background:#461923;color:#fecdd3}.kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:13px}.kv div{min-width:0}.kv span{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}.kv b{font-size:13px;word-break:break-word}.pnl{font-size:20px;font-weight:900;margin-top:13px}.ruleline{margin-top:12px;padding-top:11px;border-top:1px solid #1e293b;display:flex;gap:7px;flex-wrap:wrap}.tag{font-size:10px;font-weight:800;padding:4px 6px;border-radius:7px;background:#172033;color:#cbd5e1}.tag.pass{background:#073a2a;color:#a7f3d0}.empty{padding:28px;color:var(--muted);text-align:center}.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;min-width:900px}.table th,.table td{padding:11px 12px;border-bottom:1px solid #1e293b;text-align:left;font-size:12px}.table th{color:#94a3b8;font-size:11px;position:sticky;top:0;background:#0f172a}.tabs{display:flex;gap:6px;flex-wrap:wrap}.tab{padding:7px 10px;border:1px solid #334155;border-radius:9px;background:#101827;color:#cbd5e1;cursor:pointer;font-size:12px}.tab.active{background:#1d4ed8;border-color:#2563eb;color:white}.footer{padding:20px 2px;color:var(--muted);font-size:11px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.hidden{display:none!important}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.wrap{padding:12px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cards{grid-template-columns:1fr}.stat .v{font-size:19px}.top{align-items:flex-start}.controls{width:100%}.btn{flex:1}.section{border-radius:12px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <h1>NR7 Autonomous Demo Agent</h1>
+      <p>Exact App + Indicator + 1 &lt; R:R ≤ 4 · Binance Spot Testnet</p>
+    </div>
+    <div class="controls">
+      <span id="botPill" class="pill warn"><span class="dot"></span><span id="botText">Loading…</span></span>
+      <button id="startBtn" class="btn start" type="button">START NEW TRADES</button>
+      <button id="stopBtn" class="btn stop" type="button">STOP NEW TRADES</button>
+      <form method="post" action="/logout"><button class="btn secondary" type="submit">Logout</button></form>
+    </div>
+  </div>
+  __INSECURE_WARNING__
+  <div id="errorbar" class="errorbar"></div>
+
+  <div class="grid">
+    <div class="stat"><div class="k">Demo equity estimate</div><div id="equity" class="v">—</div><div id="freeUsdt" class="s">Testnet balance</div></div>
+    <div class="stat"><div class="k">Open P&L</div><div id="openPnl" class="v">—</div><div id="openCount" class="s">0 open</div></div>
+    <div class="stat"><div class="k">Realized P&L</div><div id="realizedPnl" class="v">—</div><div id="realizedR" class="s">0R</div></div>
+    <div class="stat"><div class="k">Today</div><div id="todayPnl" class="v">—</div><div id="todayR" class="s">0R</div></div>
+    <div class="stat"><div class="k">Win rate</div><div id="winRate" class="v">—</div><div id="winLoss" class="s">0W / 0L</div></div>
+    <div class="stat"><div class="k">Open risk</div><div id="openRisk" class="v">—</div><div id="riskLimits" class="s">1% / trade</div></div>
+  </div>
+
+  <section class="section">
+    <div class="section-head"><h2>Open positions</h2><div id="syncMeta" class="meta">Waiting for position sync…</div></div>
+    <div id="openCards" class="cards"><div class="empty">No open positions.</div></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>Trade history & signals</h2>
+      <div class="tabs">
+        <button class="tab active" data-tab="closed" type="button">Closed</button>
+        <button class="tab" data-tab="rejected" type="button">Rejected</button>
+        <button class="tab" data-tab="signals" type="button">Signals</button>
+      </div>
+    </div>
+    <div id="closedPanel" class="table-wrap"></div>
+    <div id="rejectedPanel" class="table-wrap hidden"></div>
+    <div id="signalsPanel" class="table-wrap hidden"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><h2>Engine status</h2><div id="scanMeta" class="meta">Loading…</div></div>
+    <div class="table-wrap"><table class="table"><tbody id="engineBody"></tbody></table></div>
+  </section>
+
+  <div class="footer"><span>Mode is hard-wired to Binance Spot Testnet only.</span><span id="updated">Not updated yet</span></div>
+</div>
+<script>
+(() => {
+  const csrf = __CSRF_TOKEN_JSON__;
+  let state = null;
+  const $ = id => document.getElementById(id);
+  const money = v => v == null ? '—' : `${Number(v)>=0?'+':''}${Number(v).toFixed(2)} USDT`;
+  const num = (v,d=4) => v == null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
+  const pct = v => v == null ? '—' : `${Number(v).toFixed(2)}%`;
+  const date = v => !v ? '—' : new Date(v).toLocaleString();
+  const cls = v => Number(v)>0?'good':Number(v)<0?'bad':'';
+  const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+
+  function setMoney(id,v){ const el=$(id); el.textContent=money(v); el.className='v '+cls(v); }
+  function showError(msg){ const e=$('errorbar'); if(!msg){e.style.display='none';e.textContent='';return} e.style.display='block';e.textContent=msg; }
+
+  function renderOpen(rows){
+    const root=$('openCards');
+    if(!rows.length){root.innerHTML='<div class="empty">No open positions.</div>';return}
+    root.innerHTML=rows.map(t=>`<article class="trade">
+      <div class="trade-top"><div><div class="symbol">${esc(t.symbol)}</div><div class="mono" style="font-size:10px;color:#64748b;margin-top:3px">${esc(t.signal_key)}</div></div><span class="status open">OPEN</span></div>
+      <div class="kv">
+        <div><span>Entry</span><b>${num(t.entry_price,8)}</b></div><div><span>Current</span><b>${num(t.current_price,8)}</b></div>
+        <div><span>TP</span><b>${num(t.tp,8)}</b></div><div><span>SL</span><b>${num(t.sl,8)}</b></div>
+        <div><span>R:R</span><b>${num(t.rr,2)}</b></div><div><span>Risk</span><b>${money(t.risk_usdt)}</b></div>
+        <div><span>Quantity</span><b>${num(t.quantity,8)}</b></div><div><span>Opened</span><b>${date(t.opened_at)}</b></div>
+      </div>
+      <div class="pnl ${cls(t.unrealized_pnl_usdt)}">${money(t.unrealized_pnl_usdt)} <span style="font-size:12px">(${pct(t.unrealized_pct)})</span></div>
+      <div class="ruleline"><span class="tag pass">APP PASS</span><span class="tag pass">INDICATOR PASS</span><span class="tag pass">R:R PASS</span><span class="tag">App Vol ${num(t.app_volume_surge,2)}x</span><span class="tag">Ind Vol ${num(t.indicator_volume_surge,2)}x</span></div>
+    </article>`).join('');
+  }
+
+  function table(headers, rows){
+    if(!rows.length) return '<div class="empty">No records yet.</div>';
+    return `<table class="table"><thead><tr>${headers.map(h=>`<th>${h[0]}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${headers.map(h=>`<td>${h[1](r)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  }
+
+  function renderClosed(rows){
+    $('closedPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Result',r=>`<span class="${r.outcome==='TP'?'good':'bad'}"><b>${esc(r.outcome||'—')}</b></span>`],
+      ['Entry',r=>num(r.entry_price,8)],['Exit',r=>num(r.exit_price,8)],['TP',r=>num(r.tp,8)],['SL',r=>num(r.sl,8)],['R:R',r=>num(r.rr,2)],
+      ['P&L',r=>`<span class="${cls(r.pnl_usdt)}"><b>${money(r.pnl_usdt)}</b></span>`],['R',r=>`<span class="${cls(r.realized_r)}">${num(r.realized_r,2)}R</span>`],['Closed',r=>date(r.closed_at)]
+    ],rows);
+  }
+  function renderRejected(rows){
+    $('rejectedPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Reason',r=>`<span class="bad">${esc(r.reason||'Rejected')}</span>`]
+    ],rows);
+  }
+  function renderSignals(rows){
+    $('signalsPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Status',r=>esc(r.status)],['Time',r=>date(r.close_time_utc)],['Entry',r=>num(r.entry,8)],['TP',r=>num(r.tp,8)],['SL',r=>num(r.sl,8)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Confidence',r=>`${esc(r.confidence_level||'—')} ${r.confidence_score??''}`]
+    ],rows);
+  }
+
+  function renderEngine(d){
+    const m=d.meta, r=d.risk;
+    const items=[
+      ['Execution',m.execution_ready?'<span class="good"><b>READY</b></span>':`<span class="bad"><b>NOT READY</b></span> ${esc(m.execution_error||'')}`],
+      ['New entries',m.new_entries_enabled?'<span class="good"><b>ENABLED</b></span>':'<span class="warnc"><b>PAUSED</b></span>'],
+      ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
+      ['Strategy','App + Indicator + 1 < R:R ≤ 4'],['Risk','1%/trade · max 3 positions · max 3% open risk · −3R/day'],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
+    ];
+    $('engineBody').innerHTML=items.map(x=>`<tr><th style="width:180px">${x[0]}</th><td>${x[1]}</td></tr>`).join('');
+    $('scanMeta').textContent=m.scan_in_progress?'Scanning market now…':`Last scan: ${date(m.last_scan_completed)}`;
+    $('syncMeta').textContent=`Last sync: ${date(m.last_position_sync)}`;
+  }
+
+  function render(d){
+    state=d; const m=d.meta,s=d.stats,r=d.risk;
+    const enabled=m.new_entries_enabled && m.execution_ready;
+    $('botPill').className='pill '+(enabled?'good':m.execution_ready?'warn':'bad');
+    $('botText').textContent=enabled?'RUNNING / NEW TRADES ON':m.execution_ready?'RUNNING / NEW TRADES PAUSED':'TESTNET NOT READY';
+    $('startBtn').disabled=!m.execution_ready || m.new_entries_enabled;
+    $('stopBtn').disabled=!m.new_entries_enabled;
+    $('equity').textContent=s.estimated_demo_equity_usdt==null?'—':`${num(s.estimated_demo_equity_usdt,2)} USDT`;
+    $('freeUsdt').textContent=`Free Testnet USDT: ${m.testnet_free_usdt==null?'—':num(m.testnet_free_usdt,2)} · risk cap ${num(r.demo_equity_cap_usdt,0)}`;
+    setMoney('openPnl',s.unrealized_pnl_usdt); $('openCount').textContent=`${s.open_count} / ${r.max_open_positions} positions`;
+    setMoney('realizedPnl',s.realized_pnl_usdt); $('realizedR').textContent=`${num(s.realized_r,2)}R total`;
+    setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
+    $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
+    $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`${r.risk_per_trade_pct}%/trade · ${r.max_total_open_risk_pct}% max`;
+    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderEngine(d);
+    $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
+    if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');
+  }
+
+  async function refresh(){
+    try{ const res=await fetch('/api/status',{cache:'no-store'}); if(res.status===401){location='/login';return} if(!res.ok) throw new Error(`HTTP ${res.status}`); render(await res.json()); }
+    catch(e){ showError(`Dashboard refresh failed: ${e.message}`); }
+  }
+  async function action(path){
+    const btns=[$('startBtn'),$('stopBtn')];btns.forEach(b=>b.disabled=true);
+    try{const res=await fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrf}});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);await refresh()}catch(e){showError(e.message)}finally{if(state){$('startBtn').disabled=!state.meta.execution_ready||state.meta.new_entries_enabled;$('stopBtn').disabled=!state.meta.new_entries_enabled}}
+  }
+  $('startBtn').addEventListener('click',()=>action('/api/start'));
+  $('stopBtn').addEventListener('click',()=>action('/api/stop'));
+  document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+    ['closed','rejected','signals'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
+  }));
+  refresh(); setInterval(refresh,5000);
+})();
+</script>
+</body>
+</html>

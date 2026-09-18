@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.git/
+.env
+config.json
+data/
+state.json
+events.jsonl
+signals.json
+*.sqlite3

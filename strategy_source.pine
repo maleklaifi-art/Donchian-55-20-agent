@@ -1,0 +1,150 @@
+//@version=5
+indicator("Automatic NR7 + Confirmed Strong Pivot High", overlay=false, max_labels_count=500)
+
+// Settings
+volumeLookback       = input.int(168, "Volume Lookback", minval=1)
+minimumSurge         = input.float(1.5, "Minimum Volume Surge", minval=0.1, step=0.1)
+minimumClosePosition = input.float(0.75, "Minimum Close Position", minval=0.0, maxval=1.0, step=0.05)
+minimumRewardRisk    = input.float(1.0, "Minimum Reward/Risk", minval=0.0, step=0.1)
+swingLength          = input.int(50, "LuxAlgo Swing Length", minval=10)
+
+// Previous completed daily candle
+previousDailyHigh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+previousDailyLow = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+previousDailyRange = request.security(syminfo.tickerid, "D", (high - low)[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+lowestRangeSevenDays = request.security(syminfo.tickerid, "D", ta.lowest(high - low, 7)[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// The previous completed day is NR7 when its range is the smallest of seven days.
+previousDayIsNR7 = not na(lowestRangeSevenDays) and previousDailyRange <= lowestRangeSevenDays
+newDay = ta.change(time("D")) != 0
+
+// Preserve the latest completed NR7 box.
+var float boxHigh = na
+var float boxLow = na
+if newDay and previousDayIsNR7
+    boxHigh := previousDailyHigh
+    boxLow := previousDailyLow
+
+// LuxAlgo-compatible confirmed swing-pivot state.
+// 0 = bearish leg, 1 = bullish leg.
+var int swingLeg = 0
+newLegHigh = high[swingLength] > ta.highest(high, swingLength)
+newLegLow = low[swingLength] < ta.lowest(low, swingLength)
+previousSwingLeg = swingLeg
+if newLegHigh
+    swingLeg := 0
+else if newLegLow
+    swingLeg := 1
+
+newPivot = swingLeg != previousSwingLeg
+newPivotLow = newPivot and swingLeg == 1
+newPivotHigh = newPivot and swingLeg == 0
+
+var float currentSwingHigh = na
+var float currentSwingLow = na
+var bool swingHighCrossed = false
+var bool swingLowCrossed = false
+var int swingTrend = 0
+
+// Fixed confirmed highs remain stored until a later candle touches them.
+var array<float> confirmedHighLevels = array.new_float()
+var array<int> confirmedHighBars = array.new_int()
+
+// Remove old targets touched after their confirmation bar.
+if array.size(confirmedHighLevels) > 0
+    for targetIndex = array.size(confirmedHighLevels) - 1 to 0
+        targetLevel = array.get(confirmedHighLevels, targetIndex)
+        confirmationBar = array.get(confirmedHighBars, targetIndex)
+        if bar_index > confirmationBar and high >= targetLevel
+            array.remove(confirmedHighLevels, targetIndex)
+            array.remove(confirmedHighBars, targetIndex)
+
+if newPivotHigh
+    currentSwingHigh := high[swingLength]
+    swingHighCrossed := false
+    array.push(confirmedHighLevels, currentSwingHigh)
+    array.push(confirmedHighBars, bar_index)
+
+if newPivotLow
+    currentSwingLow := low[swingLength]
+    swingLowCrossed := false
+
+// LuxAlgo labels its current High as Strong while swing bias is bearish.
+if not na(currentSwingHigh) and ta.crossover(close, currentSwingHigh) and not swingHighCrossed
+    swingHighCrossed := true
+    swingTrend := 1
+
+if not na(currentSwingLow) and ta.crossunder(close, currentSwingLow) and not swingLowCrossed
+    swingLowCrossed := true
+    swingTrend := -1
+
+currentHighIsStrong = swingTrend == -1
+
+// Nearest confirmed, fixed, still-unrevisited pivot high above the entire candle.
+float fixedStrongHighTarget = na
+if currentHighIsStrong and array.size(confirmedHighLevels) > 0
+    for targetIndex = 0 to array.size(confirmedHighLevels) - 1
+        targetLevel = array.get(confirmedHighLevels, targetIndex)
+        if targetLevel > high and (na(fixedStrongHighTarget) or targetLevel < fixedStrongHighTarget)
+            fixedStrongHighTarget := targetLevel
+
+// Exclude the current candle from the volume baseline.
+averageVolume = ta.sma(volume, volumeLookback)[1]
+requiredVolume = averageVolume * minimumSurge
+volumeSurge = not na(averageVolume) and averageVolume > 0 ? volume / averageVolume : 0.0
+
+// Newly confirmed crossing above the automatic NR7 Box High.
+confirmedBreakout = barstate.isconfirmed and not na(boxHigh) and close > boxHigh and close[1] <= boxHigh
+
+// Require the candle to close in its upper 25%.
+candleRange = high - low
+closePosition = candleRange > 0 ? (close - low) / candleRange : 0.0
+strongClose = closePosition >= minimumClosePosition
+
+// TP = fixed confirmed Strong High. SL = NR7 box low. Reward must exceed risk.
+risk = not na(boxLow) ? close - boxLow : na
+reward = not na(fixedStrongHighTarget) ? fixedStrongHighTarget - close : na
+rewardRisk = not na(risk) and risk > 0 and not na(reward) ? reward / risk : na
+positiveRewardRisk = not na(rewardRisk) and rewardRisk > minimumRewardRisk
+
+isOneHourChart = timeframe.isminutes and timeframe.multiplier == 60
+validBreakout = isOneHourChart and confirmedBreakout and volumeSurge >= minimumSurge and strongClose and currentHighIsStrong and not na(fixedStrongHighTarget) and positiveRewardRisk
+
+// Rule-based setup confidence. This is a relative quality score, not a
+// predicted probability or guarantee. It does not change signal eligibility.
+volumeStrength = math.min(math.max((volumeSurge - minimumSurge) / minimumSurge, 0.0), 1.0)
+closePositionRoom = 1.0 - minimumClosePosition
+closeStrength = closePositionRoom > 0 ? math.min(math.max((closePosition - minimumClosePosition) / closePositionRoom, 0.0), 1.0) : 1.0
+rewardRiskStrength = math.min(math.max((rewardRisk - minimumRewardRisk) / 2.0, 0.0), 1.0)
+confidenceScore = math.round(50.0 + 20.0 * volumeStrength + 15.0 * closeStrength + 15.0 * rewardRiskStrength)
+confidenceLevel = confidenceScore >= 80 ? "HIGH" : confidenceScore >= 65 ? "MEDIUM" : "LOW"
+confidenceColor = confidenceScore >= 80 ? color.green : confidenceScore >= 65 ? color.orange : color.red
+
+// Every BUY is independent. This label permanently records that signal's own
+// Entry, TP, SL, R:R and rule-based confidence snapshot.
+if validBreakout
+    signalText = "BUY" +
+      "\nEntry: " + str.tostring(close, format.mintick) +
+      "\nTP: " + str.tostring(fixedStrongHighTarget, format.mintick) +
+      "\nSL: " + str.tostring(boxLow, format.mintick) +
+      "\nR:R: " + str.tostring(rewardRisk, "#.##") +
+      "\nConfidence: " + confidenceLevel + " (" + str.tostring(confidenceScore, "#") + "/100)"
+    label.new(bar_index, volume, signalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=confidenceColor, textcolor=color.white, size=size.small)
+
+// Volume panel
+plot(volume, title="Volume", color=validBreakout ? color.lime : color.gray, style=plot.style_columns)
+plot(requiredVolume, title="Required Volume", color=color.red)
+
+// Values available in the Data Window
+plot(boxHigh, title="Automatic NR7 Box High", display=display.data_window)
+plot(boxLow, title="Automatic NR7 Box Low / Stop", display=display.data_window)
+plot(fixedStrongHighTarget, title="Fixed Confirmed Strong High / Target", display=display.data_window)
+plot(volumeSurge, title="Volume Surge", display=display.data_window)
+plot(closePosition, title="Close Position", display=display.data_window)
+plot(rewardRisk, title="Reward/Risk", display=display.data_window)
+plot(currentHighIsStrong ? 1 : 0, title="Strong High State", display=display.data_window)
+plot(validBreakout ? confidenceScore : na, title="Signal Confidence Score", display=display.data_window)
+
+// Signal
+plotshape(validBreakout, title="Valid Strong-High Breakout", style=shape.triangleup, location=location.bottom, color=color.lime, size=size.small, text="BUY")
+alertcondition(validBreakout, title="Valid NR7 Strong-High Breakout", message="Confirmed NR7 BUY. Open the signal candle label for its Entry, fixed Strong High TP, NR7 Box Low SL, R:R and rule-based confidence.")

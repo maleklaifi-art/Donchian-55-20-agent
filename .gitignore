@@ -1,0 +1,6 @@
+.env
+config.json
+*.db
+data/
+__pycache__/
+*.pyc
