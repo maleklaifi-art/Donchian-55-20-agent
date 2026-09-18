@@ -7,7 +7,6 @@
   "risk_per_trade_pct": 1.0,
   "max_risk_per_trade_usdt": 2.0,
   "max_open_positions": 1,
-  "max_positions_per_day": 1,
   "max_total_open_risk_pct": 1.0,
   "daily_loss_limit_r": 3.0,
   "max_position_notional_pct": 100.0,
