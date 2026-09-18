@@ -243,7 +243,10 @@ class CloudDemoEngine:
         stats["unrealized_pnl_usdt"] = unrealized
         stats["total_pnl_usdt"] = stats["realized_pnl_usdt"] + unrealized
         stats["open_risk_usdt"] = open_risk
-        stats["estimated_demo_equity_usdt"] = (self.testnet_free_usdt or 0.0) + open_value if self.testnet_free_usdt is not None else None
+        stats["estimated_demo_equity_usdt"] = (
+            min((self.testnet_free_usdt or 0.0) + open_value, self.cfg.demo_equity_cap_usdt)
+            if self.testnet_free_usdt is not None else None
+        )
 
         with self.meta_lock:
             meta = {
@@ -266,7 +269,9 @@ class CloudDemoEngine:
             "meta": meta,
             "risk": {
                 "risk_per_trade_pct": self.cfg.risk_per_trade_pct,
+                "max_risk_per_trade_usdt": self.cfg.max_risk_per_trade_usdt,
                 "max_open_positions": self.cfg.max_open_positions,
+                "max_positions_per_day": self.cfg.max_positions_per_day,
                 "max_total_open_risk_pct": self.cfg.max_total_open_risk_pct,
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
