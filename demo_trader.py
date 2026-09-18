@@ -34,12 +34,14 @@ class BotConfig:
 
     # Frozen risk defaults requested for demo validation.
     risk_per_trade_pct: float = 1.0
-    max_open_positions: int = 3
-    max_total_open_risk_pct: float = 3.0
+    max_risk_per_trade_usdt: float = 2.0
+    max_open_positions: int = 1
+    max_positions_per_day: int = 1
+    max_total_open_risk_pct: float = 1.0
     daily_loss_limit_r: float = 3.0
-    max_position_notional_pct: float = 33.0
+    max_position_notional_pct: float = 100.0
     max_entry_drift_pct: float = 0.30
-    demo_equity_cap_usdt: float = 1000.0
+    demo_equity_cap_usdt: float = 200.0
 
     # API / runtime.
     request_timeout_s: int = 15
@@ -387,6 +389,30 @@ def daily_realized_r(state: dict) -> float:
     return sum(float(x.get("r", 0.0)) for x in state.get("realized", []) if x.get("day") == day)
 
 
+def positions_opened_today(state: dict) -> int:
+    day = today_utc()
+    count = 0
+
+    def opened_on_day(value) -> bool:
+        if not value:
+            return False
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).date().isoformat() == day
+        except Exception:
+            return False
+
+    for pos in state.get("open_positions", {}).values():
+        if opened_on_day(pos.get("opened_at")):
+            count += 1
+    for trade in state.get("realized", []):
+        if opened_on_day(trade.get("opened_at")):
+            count += 1
+    return count
+
+
 def signal_key(sig: Signal) -> str:
     return f"{sig.symbol}:{sig.signal_close_ms}"
 
@@ -493,6 +519,15 @@ def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
     if len(state.get("open_positions", {})) >= cfg.max_open_positions:
         logger.emit("NEW_ENTRIES_BLOCKED", reason="max open positions", count=len(state["open_positions"]))
         return False
+    opened_today = positions_opened_today(state)
+    if opened_today >= cfg.max_positions_per_day:
+        logger.emit(
+            "NEW_ENTRIES_BLOCKED",
+            reason="max positions per UTC day",
+            opened_today=opened_today,
+            max_positions_per_day=cfg.max_positions_per_day,
+        )
+        return False
     dr = daily_realized_r(state)
     if dr <= -abs(cfg.daily_loss_limit_r):
         logger.emit("NEW_ENTRIES_BLOCKED", reason="daily loss limit", daily_r=dr)
@@ -564,7 +599,11 @@ def place_signal(
     open_risk = sum(float(p.get("risk_usdt", 0)) for p in state.get("open_positions", {}).values())
     max_total_risk = equity * cfg.max_total_open_risk_pct / 100.0
     available_risk = max(0.0, max_total_risk - open_risk)
-    risk_budget = min(equity * cfg.risk_per_trade_pct / 100.0, available_risk)
+    risk_budget = min(
+        equity * cfg.risk_per_trade_pct / 100.0,
+        cfg.max_risk_per_trade_usdt,
+        available_risk,
+    )
     if risk_budget <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="combined open-risk limit", signal_key=key)
         return
