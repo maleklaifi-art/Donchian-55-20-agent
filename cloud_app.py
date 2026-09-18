@@ -271,7 +271,6 @@ class CloudDemoEngine:
                 "risk_per_trade_pct": self.cfg.risk_per_trade_pct,
                 "max_risk_per_trade_usdt": self.cfg.max_risk_per_trade_usdt,
                 "max_open_positions": self.cfg.max_open_positions,
-                "max_positions_per_day": self.cfg.max_positions_per_day,
                 "max_total_open_risk_pct": self.cfg.max_total_open_risk_pct,
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
