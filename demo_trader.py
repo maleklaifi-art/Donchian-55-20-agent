@@ -28,7 +28,9 @@ TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
 @dataclass
 class BotConfig:
     max_symbols: int = 1000
-    scan_workers: int = 8
+    scan_workers: int = 50
+    scan_interval_seconds: int = 900
+    max_confirmed_age_minutes: int = 60
     hourly_history_bars: int = 1000
     quote_asset: str = "USDT"
 
@@ -427,7 +429,7 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
     def one(sym: str, price: float):
         # Exact app uses live 1D candles (including the current forming day)
         # and 1H klines whose final row is the current forming hour.
-        daily = market.klines(sym, "1d", 100)
+        daily = market.klines(sym, "1d", 20)
         hourly = market.klines(sym, "1h", cfg.hourly_history_bars)
         return evaluate_latest(sym, daily, hourly, price, scfg, now_ms)
 
