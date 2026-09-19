@@ -499,13 +499,11 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
     signals.sort(key=lambda x: x.signal_close_ms)
     Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in signals], indent=2), encoding="utf-8")
     filtered_count = sum(1 for x in scan_rows if x.get("status") == "FILTERED")
-    breaking_count = sum(1 for x in scan_rows if x.get("status") == "BREAKING_OUT")
     confirmed_count = sum(1 for x in scan_rows if x.get("status") == "CONFIRMED")
     logger.emit(
         "SCAN_COMPLETE",
         symbols=len(coins),
         filtered=filtered_count,
-        breaking_out=breaking_count,
         confirmed=confirmed_count,
         app_confirmed=app_confirmed_count,
         indicator_rejected=indicator_rejected_count,
