@@ -121,18 +121,25 @@ class PublicMarketClient:
                 time.sleep(0.6 * (attempt + 1))
         raise RuntimeError(f"public request failed {path}: {last_error}")
 
-    def symbols(self, quote_asset: str, max_symbols: int) -> List[str]:
-        info = self.get("/api/v3/exchangeInfo")
-        candidates = [
-            x["symbol"] for x in info.get("symbols", [])
-            if x.get("status") == "TRADING"
-            and x.get("quoteAsset") == quote_asset
-            and x.get("isSpotTradingAllowed", True)
-        ]
+    def ranked_coins(self, quote_asset: str, max_symbols: int) -> List[Tuple[str, float]]:
+        """Exact app universe/ranking from anter-pre-final: 24h ticker, *USDT, exclude token-name markers."""
         tickers = self.get("/api/v3/ticker/24hr")
-        quote_vol = {x["symbol"]: float(x.get("quoteVolume", 0) or 0) for x in tickers if "symbol" in x}
-        candidates.sort(key=lambda s: quote_vol.get(s, 0.0), reverse=True)
-        return candidates[:max_symbols]
+        coins: List[Tuple[str, float, float]] = []
+        suffix = quote_asset.upper()
+        for x in tickers:
+            symbol = str(x.get("symbol", ""))
+            if not symbol.endswith(suffix):
+                continue
+            if any(marker in symbol for marker in ("UP", "DOWN", "BULL", "BEAR")):
+                continue
+            try:
+                price = float(x.get("lastPrice", 0) or 0)
+                qv = float(x.get("quoteVolume", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            coins.append((symbol, price, qv))
+        coins.sort(key=lambda row: row[2], reverse=True)
+        return [(s, p) for (s, p, _) in coins[:max_symbols]]
 
     def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
         rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
@@ -405,21 +412,58 @@ def account_free(account: dict, asset: str) -> float:
 
 
 def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None) -> List[Signal]:
-    symbols = market.symbols(cfg.quote_asset, cfg.max_symbols)
+    """Run exact app stage first, then the exact saved indicator stage.
+
+    Every app-confirmed breakout is emitted to the event/database layer. If the
+    indicator rejects it, the rejection reason is emitted instead of silently
+    disappearing from the dashboard.
+    """
+    coins = market.ranked_coins(cfg.quote_asset, cfg.max_symbols)
     now_ms = int(time.time() * 1000)
     signals: List[Signal] = []
+    app_confirmed_count = 0
+    indicator_rejected_count = 0
 
-    def one(sym: str):
-        h = market.klines(sym, "1h", cfg.hourly_history_bars)
-        return evaluate_latest(sym, h, scfg, now_ms)
+    def one(sym: str, price: float):
+        # Exact app uses live 1D candles (including the current forming day)
+        # and 1H klines whose final row is the current forming hour.
+        daily = market.klines(sym, "1d", 100)
+        hourly = market.klines(sym, "1h", cfg.hourly_history_bars)
+        return evaluate_latest(sym, daily, hourly, price, scfg, now_ms)
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.scan_workers)) as pool:
-        futs = {pool.submit(one, s): s for s in symbols}
+        futs = {pool.submit(one, sym, price): sym for sym, price in coins}
         for fut in as_completed(futs):
             sym = futs[fut]
             try:
-                sig = fut.result()
-                if sig:
+                sig, candidate = fut.result()
+                if candidate is not None:
+                    app_confirmed_count += 1
+                    sk = f"{candidate['symbol']}:{candidate['signal_close_ms']}"
+                    candidate["signal_key"] = sk
+                    logger.emit("APP_CONFIRMED", **candidate)
+
+                    if sig is None:
+                        indicator_rejected_count += 1
+                        logger.emit(
+                            "TRADE_REJECTED",
+                            symbol=candidate["symbol"],
+                            signal_key=sk,
+                            reason=candidate.get("reason") or "indicator conditions failed",
+                            app_volume_surge=candidate.get("app_volume_surge"),
+                            indicator_volume_surge=candidate.get("indicator_volume_surge"),
+                            close_position=candidate.get("close_position"),
+                            rr=candidate.get("rr"),
+                            entry=candidate.get("entry"),
+                            tp=candidate.get("tp"),
+                            sl=candidate.get("sl"),
+                            box_high=candidate.get("box_high"),
+                            box_low=candidate.get("box_low"),
+                            close_time_utc=candidate.get("close_time_utc"),
+                        )
+                        continue
+
+                if sig is not None:
                     signals.append(sig)
                     logger.emit("VALID_SIGNAL", **sig.to_dict())
                     if on_signal is not None:
@@ -429,9 +473,16 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
                             logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
             except Exception as exc:
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
+
     signals.sort(key=lambda x: x.signal_close_ms)
     Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in signals], indent=2), encoding="utf-8")
-    logger.emit("SCAN_COMPLETE", symbols=len(symbols), valid_signals=len(signals))
+    logger.emit(
+        "SCAN_COMPLETE",
+        symbols=len(coins),
+        app_confirmed=app_confirmed_count,
+        indicator_rejected=indicator_rejected_count,
+        valid_signals=len(signals),
+    )
     return signals
 
 
