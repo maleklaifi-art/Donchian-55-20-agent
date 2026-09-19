@@ -49,11 +49,13 @@
         <button class="tab active" data-tab="closed" type="button">Closed</button>
         <button class="tab" data-tab="rejected" type="button">Rejected</button>
         <button class="tab" data-tab="signals" type="button">Signals</button>
+        <button class="tab" data-tab="filtered" type="button">Filtered</button>
       </div>
     </div>
     <div id="closedPanel" class="table-wrap"></div>
     <div id="rejectedPanel" class="table-wrap hidden"></div>
     <div id="signalsPanel" class="table-wrap hidden"></div>
+    <div id="filteredPanel" class="table-wrap hidden"></div>
   </section>
 
   <section class="section">
@@ -151,6 +153,18 @@
     ],rows);
   }
 
+  function renderFiltered(rows){
+    $('filteredPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],
+      ['Price',r=>num(r.price,8)],
+      ['Filter',r=>`<span class="${r.category==='Volume'?'warnc':r.category==='Error'?'bad':''}"><b>${esc(r.category||'Filter')}</b></span>`],
+      ['Reason',r=>esc(r.reason||'Filtered')],
+      ['Vol Surge',r=>r.app_volume_surge==null?'—':`${num(r.app_volume_surge,2)}x`],
+      ['Box High',r=>num(r.box_high,8)],
+      ['Box Low',r=>num(r.box_low,8)]
+    ],rows);
+  }
+
   function renderEngine(d){
     const m=d.meta, r=d.risk;
     const items=[
@@ -190,7 +204,7 @@
     setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
     $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`max ${num(r.max_risk_per_trade_usdt,2)} USDT/trade`;
-    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderEngine(d); populateSettings(d.settings);
+    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderFiltered(d.filtered_latest||[]); renderEngine(d); populateSettings(d.settings);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');
   }
@@ -226,7 +240,7 @@
   $('stopBtn').addEventListener('click',()=>action('/api/stop'));
   document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');
-    ['closed','rejected','signals'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
+    ['closed','rejected','signals','filtered'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
   }));
   refresh(); setInterval(refresh,5000);
 })();
