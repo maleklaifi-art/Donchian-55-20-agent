@@ -48,7 +48,7 @@ class DashboardLogger(EventLogger):
         super().emit(event, **payload)
         try:
             self.db.record_event(event, payload)
-            if event == "VALID_SIGNAL":
+            if event in {"APP_CONFIRMED", "VALID_SIGNAL"}:
                 self.db.upsert_signal(payload)
             elif event == "TRADE_REJECTED":
                 sk = payload.get("signal_key")
