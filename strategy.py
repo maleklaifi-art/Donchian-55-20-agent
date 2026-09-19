@@ -237,9 +237,7 @@ def app_scan_trace(
     last_completed = hourly[-2]
     before_that = hourly[-3]
 
-    # Same app split: current candle can be "BREAKING OUT" while the last
-    # completed candle can independently be a fresh "CONFIRMED" breakout.
-    breaking_out = current_candle.high > box_high and last_completed.close <= box_high
+    # Only closed-candle confirmed breakouts are relevant to the agent.
     confirmed = last_completed.close > box_high and before_that.close <= box_high
 
     age_minutes = int(max(0, now_ms - last_completed.close_time) // 60_000)
@@ -248,12 +246,6 @@ def app_scan_trace(
         row["category"] = "Confirmed"
         row["reason"] = f"Fresh confirmed breakout ({age_minutes} min old)"
         row["signal_close_ms"] = last_completed.close_time
-        return row
-
-    if breaking_out:
-        row["status"] = "BREAKING_OUT"
-        row["category"] = "Breaking Out"
-        row["reason"] = "Current 1H candle high is above Box High"
         return row
 
     row["category"] = "Breakout"
