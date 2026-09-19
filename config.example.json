@@ -1,7 +1,7 @@
 {
   "max_symbols": 1000,
   "scan_workers": 50,
-  "scan_interval_seconds": 900,
+  "scan_interval_seconds": 3600,
   "max_confirmed_age_minutes": 60,
   "hourly_history_bars": 1000,
   "quote_asset": "USDT",
