@@ -34,7 +34,6 @@
     <div class="stat"><div class="k">App confirmed</div><div id="appConfirmedCount" class="v">—</div><div class="s">Passed app</div></div>
     <div class="stat"><div class="k">Indicator passed</div><div id="indicatorPassedCount" class="v">—</div><div class="s">Passed full indicator</div></div>
     <div class="stat"><div class="k">Indicator rejected</div><div id="indicatorRejectedCount" class="v">—</div><div class="s">App pass, indicator fail</div></div>
-    <div class="stat"><div class="k">Breaking out</div><div id="breakingCount" class="v">—</div><div class="s">Current 1H breakout</div></div>
   </div>
 
   <div class="grid" style="margin-top:12px">
@@ -206,7 +205,7 @@
     $('appConfirmedCount').textContent=c.app_confirmed??'—';
     $('indicatorPassedCount').textContent=c.indicator_passed??'—';
     $('indicatorRejectedCount').textContent=c.indicator_rejected??'—';
-    $('breakingCount').textContent=c.breaking_out??'—';
+
     const enabled=m.new_entries_enabled && m.execution_ready;
     $('botPill').className='pill '+(enabled?'good':m.execution_ready?'warn':'bad');
     $('botText').textContent=enabled?'RUNNING / NEW TRADES ON':m.execution_ready?'RUNNING / NEW TRADES PAUSED':'TESTNET NOT READY';
