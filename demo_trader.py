@@ -8,6 +8,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
@@ -104,14 +105,20 @@ class PublicMarketClient:
     def __init__(self, timeout_s: int):
         self.base = PRODUCTION_MARKET_BASE
         self.timeout_s = timeout_s
-        self.s = requests.Session()
-        self.s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
+        self._local = threading.local()
+
+    def _session(self):
+        if not hasattr(self._local, "session"):
+            s = requests.Session()
+            s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
+            self._local.session = s
+        return self._local.session
 
     def get(self, path: str, params: Optional[dict] = None):
         last_error = None
         for attempt in range(5):
             try:
-                r = self.s.get(self.base + path, params=params, timeout=self.timeout_s)
+                r = self._session().get(self.base + path, params=params, timeout=self.timeout_s)
                 if r.status_code in (418, 429):
                     retry_after = float(r.headers.get("Retry-After", "2"))
                     time.sleep(max(1.0, retry_after) * (attempt + 1))
