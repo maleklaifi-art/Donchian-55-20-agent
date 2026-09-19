@@ -105,6 +105,77 @@ class CloudDemoEngine:
         with self.state_lock:
             self.db.backfill_state(load_state(self.cfg.state_file))
 
+    def editable_settings(self):
+        return {
+            "max_symbols": self.cfg.max_symbols,
+            "scan_workers": self.cfg.scan_workers,
+            "max_confirmed_age_minutes": self.cfg.max_confirmed_age_minutes,
+            "app_minimum_surge": self.scfg.app_minimum_surge,
+            "indicator_volume_lookback": self.scfg.indicator_volume_lookback,
+            "indicator_minimum_surge": self.scfg.indicator_minimum_surge,
+            "minimum_close_position": self.scfg.minimum_close_position,
+            "minimum_reward_risk": self.scfg.minimum_reward_risk,
+            "maximum_reward_risk": self.scfg.maximum_reward_risk,
+            "swing_length": self.scfg.swing_length,
+            "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
+            "max_risk_per_trade_usdt": self.cfg.max_risk_per_trade_usdt,
+            "max_open_positions": self.cfg.max_open_positions,
+            "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
+            "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
+            "schedule": "HOURLY_AT_00_UTC",
+        }
+
+    def apply_settings(self, raw: dict):
+        specs = {
+            "max_symbols": (int, 1, 1000),
+            "scan_workers": (int, 1, 50),
+            "max_confirmed_age_minutes": (int, 0, 59),
+            "app_minimum_surge": (float, 0.1, 100.0),
+            "indicator_volume_lookback": (int, 1, 500),
+            "indicator_minimum_surge": (float, 0.1, 100.0),
+            "minimum_close_position": (float, 0.0, 1.0),
+            "minimum_reward_risk": (float, 0.0, 20.0),
+            "maximum_reward_risk": (float, 0.1, 20.0),
+            "swing_length": (int, 10, 500),
+            "demo_equity_cap_usdt": (float, 10.0, 1000000.0),
+            "max_risk_per_trade_usdt": (float, 0.01, 100000.0),
+            "max_open_positions": (int, 1, 20),
+            "daily_loss_limit_r": (float, 0.1, 100.0),
+            "max_entry_drift_pct": (float, 0.0, 10.0),
+        }
+        parsed = {}
+        for key, (typ, lo, hi) in specs.items():
+            if key not in raw:
+                continue
+            try:
+                value = typ(raw[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be a valid number")
+            if value < lo or value > hi:
+                raise ValueError(f"{key} must be between {lo} and {hi}")
+            parsed[key] = value
+
+        min_rr = parsed.get("minimum_reward_risk", self.scfg.minimum_reward_risk)
+        max_rr = parsed.get("maximum_reward_risk", self.scfg.maximum_reward_risk)
+        if max_rr <= min_rr:
+            raise ValueError("maximum_reward_risk must be greater than minimum_reward_risk")
+
+        with self.meta_lock:
+            for key in ("max_symbols","scan_workers","max_confirmed_age_minutes","demo_equity_cap_usdt",
+                        "max_risk_per_trade_usdt","max_open_positions","daily_loss_limit_r","max_entry_drift_pct"):
+                if key in parsed:
+                    setattr(self.cfg, key, parsed[key])
+            for key in ("app_minimum_surge","indicator_volume_lookback","indicator_minimum_surge",
+                        "minimum_close_position","minimum_reward_risk","maximum_reward_risk","swing_length"):
+                if key in parsed:
+                    setattr(self.scfg, key, parsed[key])
+
+            settings = self.editable_settings()
+            SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+
+        self.logger.emit("SETTINGS_UPDATED", settings=settings)
+        return settings
+
     def _configure_execution(self):
         if not self.credentials_configured:
             self.execution_ready = False
@@ -292,6 +363,7 @@ class CloudDemoEngine:
             "rejected_signals": self.db.signals("REJECTED", 60),
             "recent_signals": self.db.signals(None, 60),
             "recent_events": self.db.recent_events(60),
+            "settings": self.editable_settings(),
         }
 
 
@@ -304,9 +376,28 @@ cfg.state_file = str(DATA_DIR / "state.json")
 cfg.event_log = str(DATA_DIR / "events.jsonl")
 cfg.signal_log = str(DATA_DIR / "signals.json")
 cfg.kill_switch_file = str(DATA_DIR / "STOP_TRADING")
+SETTINGS_PATH = DATA_DIR / "dashboard_settings.json"
+if SETTINGS_PATH.exists():
+    try:
+        saved_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        for key in ("max_symbols","scan_workers","max_confirmed_age_minutes","demo_equity_cap_usdt",
+                    "max_risk_per_trade_usdt","max_open_positions","daily_loss_limit_r","max_entry_drift_pct"):
+            if key in saved_settings and hasattr(cfg, key):
+                setattr(cfg, key, saved_settings[key])
+    except Exception as exc:
+        print(json.dumps({"event":"SETTINGS_LOAD_ERROR","error":str(exc)}), flush=True)
 
 db = TradeDatabase(str(DATA_DIR / "trades.sqlite3"))
 engine = CloudDemoEngine(cfg, db)
+if SETTINGS_PATH.exists():
+    try:
+        saved_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        for key in ("app_minimum_surge","indicator_volume_lookback","indicator_minimum_surge",
+                    "minimum_close_position","minimum_reward_risk","maximum_reward_risk","swing_length"):
+            if key in saved_settings and hasattr(engine.scfg, key):
+                setattr(engine.scfg, key, saved_settings[key])
+    except Exception:
+        pass
 if not as_bool(os.getenv("AUTO_START_NEW_TRADES"), False):
     Path(cfg.kill_switch_file).write_text("Safe startup: new entries paused. Use dashboard START.\n", encoding="utf-8")
 if as_bool(os.getenv("START_ENGINE"), True):
@@ -402,6 +493,11 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(min(n, 65536)).decode("utf-8", errors="replace")
         return {k: v[-1] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
+    def _read_json(self):
+        n = int(self.headers.get("Content-Length", "0") or 0)
+        raw = self.rfile.read(min(n, 65536)).decode("utf-8", errors="replace")
+        return json.loads(raw or "{}")
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         sid, sess = self._session()
@@ -451,6 +547,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stop":
             engine.set_new_entries_enabled(False)
             return self._json(200, {"ok": True, "new_entries_enabled": False})
+        if path == "/api/settings":
+            try:
+                out = engine.apply_settings(self._read_json())
+                return self._json(200, {"ok": True, "settings": out})
+            except ValueError as exc:
+                return self._json(400, {"ok": False, "error": str(exc)})
+            except Exception as exc:
+                return self._json(500, {"ok": False, "error": str(exc)})
         return self._send(404, b"Not found", "text/plain; charset=utf-8")
 
 
