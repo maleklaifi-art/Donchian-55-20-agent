@@ -179,6 +179,91 @@ def _confidence(indicator_surge: float, close_position: float, rr: float, cfg: S
     return score, level
 
 
+def app_scan_trace(
+    symbol: str,
+    daily: List[Candle],
+    hourly: List[Candle],
+    current_price: float,
+    cfg: StrategyConfig,
+    now_ms: int,
+) -> Dict:
+    """Classify one symbol exactly at the app stage for latest-scan dashboard parity."""
+    row: Dict = {
+        "symbol": symbol,
+        "price": current_price,
+        "category": "Filter",
+        "reason": "",
+        "app_volume_surge": None,
+        "box_high": None,
+        "box_low": None,
+        "status": "FILTERED",
+    }
+
+    if len(daily) < 10:
+        row["category"] = "Data"
+        row["reason"] = "Not enough 1D data"
+        return row
+    if len(hourly) < 3:
+        row["category"] = "Data"
+        row["reason"] = "Not enough 1H data"
+        return row
+
+    if app_stablecoin(daily, current_price):
+        row["category"] = "Filter"
+        row["reason"] = "Stablecoin / low volatility"
+        return row
+
+    box = find_nr7_daily(daily)
+    if box is None:
+        row["category"] = "NR7"
+        row["reason"] = "No NR7 box"
+        return row
+    box_high, box_low = box
+    row["box_high"] = box_high
+    row["box_low"] = box_low
+
+    surge = exact_app_volume_surge(daily)
+    row["app_volume_surge"] = surge
+    if surge is None:
+        row["category"] = "Volume"
+        row["reason"] = "Volume baseline unavailable"
+        return row
+    if surge < cfg.app_minimum_surge:
+        row["category"] = "Volume"
+        row["reason"] = f"Vol surge {surge:.2f}x < {cfg.app_minimum_surge:.2f}x"
+        return row
+
+    current_candle = hourly[-1]
+    last_completed = hourly[-2]
+    before_that = hourly[-3]
+
+    # Same app split: current candle can be "BREAKING OUT" while the last
+    # completed candle can independently be a fresh "CONFIRMED" breakout.
+    breaking_out = current_candle.high > box_high and last_completed.close <= box_high
+    confirmed = last_completed.close > box_high and before_that.close <= box_high
+
+    age_minutes = int(max(0, now_ms - last_completed.close_time) // 60_000)
+    if confirmed and age_minutes <= cfg.max_confirmed_age_minutes:
+        row["status"] = "CONFIRMED"
+        row["category"] = "Confirmed"
+        row["reason"] = f"Fresh confirmed breakout ({age_minutes} min old)"
+        row["signal_close_ms"] = last_completed.close_time
+        return row
+
+    if breaking_out:
+        row["status"] = "BREAKING_OUT"
+        row["category"] = "Breaking Out"
+        row["reason"] = "Current 1H candle high is above Box High"
+        return row
+
+    row["category"] = "Breakout"
+    if confirmed:
+        row["reason"] = f"Confirmed breakout is {age_minutes} min old > {cfg.max_confirmed_age_minutes} min"
+    else:
+        row["reason"] = "No fresh confirmed breakout"
+    return row
+
+
 def evaluate_latest(
     symbol: str,
     daily: List[Candle],
