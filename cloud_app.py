@@ -146,10 +146,19 @@ class CloudDemoEngine:
         return not Path(self.cfg.kill_switch_file).exists()
 
     def _scanner_loop(self):
+        # Scan exactly once per hour, aligned to the top of the UTC hour.
+        # Example: 10:00, 11:00, 12:00 ... regardless of when the service started.
         while not self.stop_event.is_set():
-            self._run_scan()
+            now = time.time()
+            next_hour = (int(now // 3600) + 1) * 3600
             self.scan_wakeup.clear()
-            self.scan_wakeup.wait(timeout=max(60.0, float(self.cfg.scan_interval_seconds)))
+            woke_early = self.scan_wakeup.wait(timeout=max(1.0, next_hour - now))
+            if self.stop_event.is_set():
+                break
+            if woke_early:
+                # Manual START can wake the loop, but exact scheduling still waits for :00.
+                continue
+            self._run_scan()
 
     def _run_scan(self):
         with self.meta_lock:
