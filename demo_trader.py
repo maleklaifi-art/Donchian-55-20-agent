@@ -442,6 +442,13 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
             sym = futs[fut]
             try:
                 trace, sig, candidate = fut.result()
+
+                if candidate is not None:
+                    trace["indicator_pass"] = sig is not None
+                    trace["indicator_reason"] = None if sig is not None else candidate.get("reason")
+                else:
+                    trace["indicator_pass"] = None
+                    trace["indicator_reason"] = None
                 scan_rows.append(trace)
 
                 if candidate is not None:
