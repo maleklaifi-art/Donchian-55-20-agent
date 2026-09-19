@@ -100,6 +100,7 @@ class CloudDemoEngine:
         self.last_price_refresh: Optional[str] = None
         self.live_prices: Dict[str, float] = {}
         self.testnet_free_usdt: Optional[float] = None
+        self.latest_scan_rows = []
         self.started_at = utc_now()
         self._configure_execution()
         with self.state_lock:
@@ -248,8 +249,12 @@ class CloudDemoEngine:
                 state = load_state(self.cfg.state_file)
                 place_signal(sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger)
 
+        def on_scan_rows(rows):
+            with self.meta_lock:
+                self.latest_scan_rows = rows
+
         try:
-            scan_market(self.market, self.cfg, self.scfg, self.logger, on_signal=on_signal)
+            scan_market(self.market, self.cfg, self.scfg, self.logger, on_signal=on_signal, on_scan_rows=on_scan_rows)
             with self.meta_lock:
                 self.last_scan_completed = utc_now()
         except Exception as exc:
@@ -364,6 +369,9 @@ class CloudDemoEngine:
             "recent_signals": self.db.signals(None, 60),
             "recent_events": self.db.recent_events(60),
             "settings": self.editable_settings(),
+            "filtered_latest": [x for x in self.latest_scan_rows if x.get("status") == "FILTERED"],
+            "breaking_out_latest": [x for x in self.latest_scan_rows if x.get("status") == "BREAKING_OUT"],
+            "confirmed_latest": [x for x in self.latest_scan_rows if x.get("status") == "CONFIRMED"],
         }
 
 
