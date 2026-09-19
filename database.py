@@ -128,8 +128,8 @@ class TradeDatabase:
                     app_volume_surge=excluded.app_volume_surge,
                     indicator_volume_surge=excluded.indicator_volume_surge,
                     close_position=excluded.close_position, confidence_score=excluded.confidence_score,
-                    confidence_level=excluded.confidence_level, updated_at=excluded.updated_at,
-                    payload_json=excluded.payload_json
+                    confidence_level=excluded.confidence_level, status='VALID', reason=NULL,
+                    updated_at=excluded.updated_at, payload_json=excluded.payload_json
                 """,
                 (
                     sk, symbol, close_ms, payload.get("close_time_utc"), self._f(payload.get("entry")),
