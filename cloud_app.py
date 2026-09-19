@@ -148,11 +148,8 @@ class CloudDemoEngine:
     def _scanner_loop(self):
         while not self.stop_event.is_set():
             self._run_scan()
-            now = time.time()
-            interval = max(60, int(self.cfg.scan_interval_seconds))
-            next_slot = (int(now // interval) + 1) * interval + 10
             self.scan_wakeup.clear()
-            self.scan_wakeup.wait(timeout=max(15.0, next_slot - now))
+            self.scan_wakeup.wait(timeout=max(60.0, float(self.cfg.scan_interval_seconds)))
 
     def _run_scan(self):
         with self.meta_lock:
