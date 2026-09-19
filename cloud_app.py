@@ -333,6 +333,15 @@ class CloudDemoEngine:
         )
 
         with self.meta_lock:
+            latest_rows = list(self.latest_scan_rows)
+            scan_counts = {
+                "scanned": len(latest_rows),
+                "filtered": sum(1 for x in latest_rows if x.get("status") == "FILTERED"),
+                "breaking_out": sum(1 for x in latest_rows if x.get("status") == "BREAKING_OUT"),
+                "app_confirmed": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED"),
+                "indicator_passed": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED" and x.get("indicator_pass") is True),
+                "indicator_rejected": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED" and x.get("indicator_pass") is False),
+            }
             meta = {
                 "service_running": True,
                 "started_at": self.started_at,
@@ -351,6 +360,7 @@ class CloudDemoEngine:
             }
         return {
             "meta": meta,
+            "scan_counts": scan_counts,
             "risk": {
                 "risk_per_trade_pct": self.cfg.risk_per_trade_pct,
                 "max_risk_per_trade_usdt": self.cfg.max_risk_per_trade_usdt,
