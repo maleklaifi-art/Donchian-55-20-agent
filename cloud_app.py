@@ -337,7 +337,6 @@ class CloudDemoEngine:
             scan_counts = {
                 "scanned": len(latest_rows),
                 "filtered": sum(1 for x in latest_rows if x.get("status") == "FILTERED"),
-                "breaking_out": sum(1 for x in latest_rows if x.get("status") == "BREAKING_OUT"),
                 "app_confirmed": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED"),
                 "indicator_passed": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED" and x.get("indicator_pass") is True),
                 "indicator_rejected": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED" and x.get("indicator_pass") is False),
@@ -380,7 +379,6 @@ class CloudDemoEngine:
             "recent_events": self.db.recent_events(60),
             "settings": self.editable_settings(),
             "filtered_latest": [x for x in self.latest_scan_rows if x.get("status") == "FILTERED"],
-            "breaking_out_latest": [x for x in self.latest_scan_rows if x.get("status") == "BREAKING_OUT"],
             "confirmed_latest": [x for x in self.latest_scan_rows if x.get("status") == "CONFIRMED"],
         }
 
