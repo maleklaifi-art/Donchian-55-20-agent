@@ -29,6 +29,15 @@
   <div id="errorbar" class="errorbar"></div>
 
   <div class="grid">
+    <div class="stat"><div class="k">Scanned</div><div id="scanCount" class="v">—</div><div class="s">Latest scan</div></div>
+    <div class="stat"><div class="k">Filtered</div><div id="filteredCount" class="v">—</div><div class="s">Failed app stage</div></div>
+    <div class="stat"><div class="k">App confirmed</div><div id="appConfirmedCount" class="v">—</div><div class="s">Passed app</div></div>
+    <div class="stat"><div class="k">Indicator passed</div><div id="indicatorPassedCount" class="v">—</div><div class="s">Passed full indicator</div></div>
+    <div class="stat"><div class="k">Indicator rejected</div><div id="indicatorRejectedCount" class="v">—</div><div class="s">App pass, indicator fail</div></div>
+    <div class="stat"><div class="k">Breaking out</div><div id="breakingCount" class="v">—</div><div class="s">Current 1H breakout</div></div>
+  </div>
+
+  <div class="grid" style="margin-top:12px">
     <div class="stat"><div class="k">Demo equity estimate</div><div id="equity" class="v">—</div><div id="freeUsdt" class="s">Testnet balance</div></div>
     <div class="stat"><div class="k">Open P&L</div><div id="openPnl" class="v">—</div><div id="openCount" class="s">0 open</div></div>
     <div class="stat"><div class="k">Realized P&L</div><div id="realizedPnl" class="v">—</div><div id="realizedR" class="s">0R</div></div>
@@ -191,7 +200,13 @@
   }
 
   function render(d){
-    state=d; const m=d.meta,s=d.stats,r=d.risk;
+    state=d; const m=d.meta,s=d.stats,r=d.risk,c=d.scan_counts||{};
+    $('scanCount').textContent=c.scanned??'—';
+    $('filteredCount').textContent=c.filtered??'—';
+    $('appConfirmedCount').textContent=c.app_confirmed??'—';
+    $('indicatorPassedCount').textContent=c.indicator_passed??'—';
+    $('indicatorRejectedCount').textContent=c.indicator_rejected??'—';
+    $('breakingCount').textContent=c.breaking_out??'—';
     const enabled=m.new_entries_enabled && m.execution_ready;
     $('botPill').className='pill '+(enabled?'good':m.execution_ready?'warn':'bad');
     $('botText').textContent=enabled?'RUNNING / NEW TRADES ON':m.execution_ready?'RUNNING / NEW TRADES PAUSED':'TESTNET NOT READY';
