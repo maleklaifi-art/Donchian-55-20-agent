@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from strategy import Candle, Signal, StrategyConfig, evaluate_latest
+from strategy import Candle, Signal, StrategyConfig, app_scan_trace, evaluate_latest
 
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
@@ -420,32 +420,30 @@ def account_free(account: dict, asset: str) -> float:
     return 0.0
 
 
-def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None) -> List[Signal]:
-    """Run exact app stage first, then the exact saved indicator stage.
-
-    Every app-confirmed breakout is emitted to the event/database layer. If the
-    indicator rejects it, the rejection reason is emitted instead of silently
-    disappearing from the dashboard.
-    """
+def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None, on_scan_rows=None) -> List[Signal]:
+    """Run exact app stage, preserve latest-scan categories, then apply the indicator."""
     coins = market.ranked_coins(cfg.quote_asset, cfg.max_symbols)
     now_ms = int(time.time() * 1000)
     signals: List[Signal] = []
     app_confirmed_count = 0
     indicator_rejected_count = 0
+    scan_rows: List[Dict[str, Any]] = []
 
     def one(sym: str, price: float):
-        # Exact app uses live 1D candles (including the current forming day)
-        # and 1H klines whose final row is the current forming hour.
         daily = market.klines(sym, "1d", 20)
         hourly = market.klines(sym, "1h", cfg.hourly_history_bars)
-        return evaluate_latest(sym, daily, hourly, price, scfg, now_ms)
+        trace = app_scan_trace(sym, daily, hourly, price, scfg, now_ms)
+        sig, candidate = evaluate_latest(sym, daily, hourly, price, scfg, now_ms)
+        return trace, sig, candidate
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.scan_workers)) as pool:
         futs = {pool.submit(one, sym, price): sym for sym, price in coins}
         for fut in as_completed(futs):
             sym = futs[fut]
             try:
-                sig, candidate = fut.result()
+                trace, sig, candidate = fut.result()
+                scan_rows.append(trace)
+
                 if candidate is not None:
                     app_confirmed_count += 1
                     sk = f"{candidate['symbol']}:{candidate['signal_close_ms']}"
@@ -481,13 +479,27 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
                         except Exception as callback_exc:
                             logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
             except Exception as exc:
+                scan_rows.append({"symbol":sym,"price":None,"category":"Error","reason":str(exc),"status":"FILTERED","app_volume_surge":None,"box_high":None,"box_low":None})
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
+
+    scan_rows.sort(key=lambda x: x.get("symbol",""))
+    if on_scan_rows is not None:
+        try:
+            on_scan_rows(scan_rows)
+        except Exception as exc:
+            logger.emit("SCAN_ROWS_CALLBACK_ERROR", error=str(exc))
 
     signals.sort(key=lambda x: x.signal_close_ms)
     Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in signals], indent=2), encoding="utf-8")
+    filtered_count = sum(1 for x in scan_rows if x.get("status") == "FILTERED")
+    breaking_count = sum(1 for x in scan_rows if x.get("status") == "BREAKING_OUT")
+    confirmed_count = sum(1 for x in scan_rows if x.get("status") == "CONFIRMED")
     logger.emit(
         "SCAN_COMPLETE",
         symbols=len(coins),
+        filtered=filtered_count,
+        breaking_out=breaking_count,
+        confirmed=confirmed_count,
         app_confirmed=app_confirmed_count,
         indicator_rejected=indicator_rejected_count,
         valid_signals=len(signals),
