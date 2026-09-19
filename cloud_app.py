@@ -73,6 +73,7 @@ class CloudDemoEngine:
         self.logger = DashboardLogger(cfg.event_log, db)
         self.scfg = StrategyConfig(
             app_minimum_surge=1.5,
+            max_confirmed_age_minutes=cfg.max_confirmed_age_minutes,
             indicator_volume_lookback=168,
             indicator_minimum_surge=1.5,
             minimum_close_position=0.75,
@@ -148,9 +149,10 @@ class CloudDemoEngine:
         while not self.stop_event.is_set():
             self._run_scan()
             now = time.time()
-            next_hour = (int(now // 3600) + 1) * 3600 + 10
+            interval = max(60, int(self.cfg.scan_interval_seconds))
+            next_slot = (int(now // interval) + 1) * interval + 10
             self.scan_wakeup.clear()
-            self.scan_wakeup.wait(timeout=max(15.0, next_hour - now))
+            self.scan_wakeup.wait(timeout=max(15.0, next_slot - now))
 
     def _run_scan(self):
         with self.meta_lock:
@@ -275,6 +277,8 @@ class CloudDemoEngine:
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
+                "scan_interval_seconds": self.cfg.scan_interval_seconds,
+                "max_confirmed_age_minutes": self.cfg.max_confirmed_age_minutes,
             },
             "stats": stats,
             "open_trades": open_trades,
