@@ -31,7 +31,7 @@ class BotConfig:
     max_symbols: int = 1000
     scan_workers: int = 50
     scan_interval_seconds: int = 3600
-    max_confirmed_age_minutes: int = 60
+    max_confirmed_age_minutes: int = 50
     hourly_history_bars: int = 1000
     quote_asset: str = "USDT"
 
