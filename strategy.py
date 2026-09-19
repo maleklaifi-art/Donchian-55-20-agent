@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -19,12 +19,16 @@ class Candle:
 
 @dataclass
 class StrategyConfig:
-    app_minimum_surge: float = 1.5          # strict > 1.5
+    # App stage (exact anter-pre-final logic).
+    app_minimum_surge: float = 1.5
+    max_confirmed_age_minutes: int = 60
+
+    # Indicator stage.
     indicator_volume_lookback: int = 168
-    indicator_minimum_surge: float = 1.5    # >= 1.5
+    indicator_minimum_surge: float = 1.5
     minimum_close_position: float = 0.75
-    minimum_reward_risk: float = 1.0        # strict > 1
-    maximum_reward_risk: float = 4.0        # <= 4
+    minimum_reward_risk: float = 1.0
+    maximum_reward_risk: float = 4.0
     swing_length: int = 50
 
 
@@ -49,91 +53,53 @@ class Signal:
         return asdict(self)
 
 
-def is_closed(c: Candle, now_ms: int) -> bool:
-    return c.close_time < now_ms
-
-
-def _utc_day(ms: int) -> int:
-    return ms // 86_400_000
-
-
-def build_daily(hourly: List[Candle]) -> List[Candle]:
-    """Aggregate closed 1H candles into UTC daily candles."""
-    if not hourly:
-        return []
-    out: List[Candle] = []
-    cur_day = None
-    o = h = l = c = vol = qv = None
-    open_ms = close_ms = None
-    for bar in hourly:
-        day = _utc_day(bar.open_time)
-        if cur_day is None or day != cur_day:
-            if cur_day is not None:
-                out.append(Candle(open_ms, o, h, l, c, vol, close_ms, qv))
-            cur_day = day
-            open_ms = bar.open_time
-            o, h, l, c = bar.open, bar.high, bar.low, bar.close
-            vol, qv = bar.volume, bar.quote_volume
-            close_ms = bar.close_time
-        else:
-            h = max(h, bar.high)
-            l = min(l, bar.low)
-            c = bar.close
-            vol += bar.volume
-            qv += bar.quote_volume
-            close_ms = bar.close_time
-    out.append(Candle(open_ms, o, h, l, c, vol, close_ms, qv))
-    return out
-
-
-def latest_prior_nr7_box(hourly: List[Candle], signal_index: int) -> Optional[Tuple[float, float]]:
-    """Latest NR7 from a PRIOR completed UTC day, matching the app/Pine state."""
-    sig_day = _utc_day(hourly[signal_index].open_time)
-    prior_hourly = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
-    daily = build_daily(prior_hourly)
-    if len(daily) < 7:
+def find_nr7_daily(daily: List[Candle]) -> Optional[Tuple[float, float]]:
+    """Exact app search: latest PRIOR 1D candle whose range is the minimum of its 7-bar window."""
+    if len(daily) < 10:
         return None
-    box = None
     ranges = [d.high - d.low for d in daily]
-    for i in range(6, len(daily)):
-        if ranges[i] <= min(ranges[i - 6 : i + 1]):
-            box = (daily[i].high, daily[i].low)
-    return box
+    current_idx = len(daily) - 1  # current, still-forming UTC daily candle
+    # Mirrors Python: range(current_idx - 1, 6, -1)
+    for i in range(current_idx - 1, 6, -1):
+        last7 = ranges[i - 6:i + 1]
+        if len(last7) == 7 and ranges[i] == min(last7):
+            return daily[i].high, daily[i].low
+    return None
 
 
-def app_volume_surge(hourly: List[Candle], signal_index: int) -> Optional[float]:
-    """App rule: current UTC day's accumulated quote volume / prior 8 full UTC days average."""
-    sig_day = _utc_day(hourly[signal_index].open_time)
-    today_qv = sum(
-        x.quote_volume for x in hourly[: signal_index + 1]
-        if _utc_day(x.open_time) == sig_day
-    )
-    prior = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
-    daily = build_daily(prior)
-    if len(daily) < 8:
-        return None
-    baseline = sum(x.quote_volume for x in daily[-8:]) / 8.0
-    if baseline <= 0:
-        return None
-    return today_qv / baseline
-
-
-def is_stablecoin_at_signal(hourly: List[Candle], signal_index: int) -> bool:
-    """Causal reproduction of the saved app's up-to-20-daily-bar stablecoin filter."""
-    partial = hourly[max(0, signal_index - 24 * 21): signal_index + 1]
-    daily = build_daily(partial)[-20:]
+def app_stablecoin(daily: List[Candle], current_price: float) -> bool:
+    """Exact technical stablecoin/low-volatility filter from anter-pre-final."""
     if len(daily) < 10:
         return False
-    price = partial[-1].close
-    if price <= 0:
+    recent = daily[-20:]
+    price_range = max(x.high for x in recent) - min(x.low for x in recent)
+    range_pct = (price_range / current_price) * 100.0 if current_price > 0 else 100.0
+    if range_pct < 3.0:
+        return True
+    vals = [((x.high - x.low) / x.close * 100.0) for x in recent if x.close > 0]
+    if not vals:
         return False
-    range_pct = (max(d.high for d in daily) - min(d.low for d in daily)) / price * 100.0
-    avg_range = sum(((d.high - d.low) / d.close * 100.0) for d in daily if d.close > 0) / len(daily)
-    if range_pct < 3.0 or avg_range < 0.4:
+    avg_range = sum(vals) / len(vals)
+    if avg_range < 0.4:
         return True
-    if any(abs(price - peg) / peg < 0.15 for peg in (1.0, 0.1)) and avg_range < 1.0:
-        return True
-    return 1500 < price < 5000 and avg_range < 0.5
+    for peg in (1.0, 0.1):
+        if abs(current_price - peg) / peg < 0.15 and avg_range < 1.0:
+            return True
+    return 1500 < current_price < 5000 and avg_range < 0.5
+
+
+def exact_app_volume_surge(daily: List[Candle]) -> Optional[float]:
+    """Current live 1D quote volume / average quote volume of the prior 8 daily candles."""
+    if len(daily) < 2:
+        return None
+    p = len(daily) - 1
+    prior = daily[max(0, p - 8):p]
+    if not prior:
+        return None
+    avg = sum(x.quote_volume for x in prior) / len(prior)
+    if avg <= 0:
+        return None
+    return daily[p].quote_volume / avg
 
 
 def _crossover(prev_close: float, close: float, level: Optional[float]) -> bool:
@@ -144,9 +110,8 @@ def _crossunder(prev_close: float, close: float, level: Optional[float]) -> bool
     return level is not None and prev_close >= level > close
 
 
-def strong_pivot_state(candles: List[Candle], swing_length: int):
-    """Translation of the saved Pine LuxAlgo-compatible state over closed 1H candles."""
-    out: List[Tuple[bool, Optional[float]]] = []
+def strong_pivot_state(candles: List[Candle], swing_length: int) -> Tuple[bool, Optional[float]]:
+    """Exact saved Pine state at the last supplied closed 1H candle."""
     swing_leg = 0
     current_swing_high = None
     current_swing_low = None
@@ -156,6 +121,7 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
     confirmed_highs: List[Tuple[float, int]] = []
 
     for i, c in enumerate(candles):
+        # A target is removed only by a later candle, after its confirmation bar.
         confirmed_highs = [
             (lvl, bar) for (lvl, bar) in confirmed_highs
             if not (i > bar and c.high >= lvl)
@@ -166,11 +132,9 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
         new_leg_low = False
         pivot_i = i - swing_length
         if pivot_i >= 0:
-            recent = candles[i - swing_length + 1: i + 1]
-            recent_high = max(x.high for x in recent)
-            recent_low = min(x.low for x in recent)
-            new_leg_high = candles[pivot_i].high > recent_high
-            new_leg_low = candles[pivot_i].low < recent_low
+            recent = candles[i - swing_length + 1:i + 1]
+            new_leg_high = candles[pivot_i].high > max(x.high for x in recent)
+            new_leg_low = candles[pivot_i].low < min(x.low for x in recent)
 
         if new_leg_high:
             swing_leg = 0
@@ -178,14 +142,11 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
             swing_leg = 1
 
         new_pivot = swing_leg != previous_leg
-        new_pivot_low = new_pivot and swing_leg == 1
-        new_pivot_high = new_pivot and swing_leg == 0
-
-        if new_pivot_high and pivot_i >= 0:
+        if new_pivot and swing_leg == 0 and pivot_i >= 0:
             current_swing_high = candles[pivot_i].high
             swing_high_crossed = False
             confirmed_highs.append((current_swing_high, i))
-        if new_pivot_low and pivot_i >= 0:
+        if new_pivot and swing_leg == 1 and pivot_i >= 0:
             current_swing_low = candles[pivot_i].low
             swing_low_crossed = False
 
@@ -198,14 +159,14 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
                 swing_low_crossed = True
                 swing_trend = -1
 
-        current_high_is_strong = swing_trend == -1
-        target = None
-        if current_high_is_strong:
-            eligible = [lvl for (lvl, _) in confirmed_highs if lvl > c.high]
-            if eligible:
-                target = min(eligible)
-        out.append((current_high_is_strong, target))
-    return out
+    current_high_is_strong = swing_trend == -1
+    target = None
+    if current_high_is_strong and candles:
+        last_high = candles[-1].high
+        eligible = [lvl for (lvl, _) in confirmed_highs if lvl > last_high]
+        if eligible:
+            target = min(eligible)
+    return current_high_is_strong, target
 
 
 def _confidence(indicator_surge: float, close_position: float, rr: float, cfg: StrategyConfig):
@@ -218,75 +179,130 @@ def _confidence(indicator_surge: float, close_position: float, rr: float, cfg: S
     return score, level
 
 
-def evaluate_latest(symbol: str, hourly: List[Candle], cfg: StrategyConfig, now_ms: int) -> Optional[Signal]:
-    hourly = [c for c in hourly if is_closed(c, now_ms)]
-    min_bars = max(cfg.indicator_volume_lookback + 2, cfg.swing_length * 2 + 3, 24 * 10)
-    if len(hourly) < min_bars:
-        return None
+def evaluate_latest(
+    symbol: str,
+    daily: List[Candle],
+    hourly: List[Candle],
+    current_price: float,
+    cfg: StrategyConfig,
+    now_ms: int,
+) -> Tuple[Optional[Signal], Optional[Dict]]:
+    """Return (valid final signal, app-confirmed candidate).
 
-    i = len(hourly) - 1
-    c, p = hourly[i], hourly[i - 1]
+    The app candidate exists only after the exact app conditions pass.
+    If the indicator rejects it, the candidate carries every computed field so
+    the dashboard can show exactly why no trade was taken.
+    """
+    if len(daily) < 10 or len(hourly) < max(cfg.indicator_volume_lookback + 2, cfg.swing_length + 3):
+        return None, None
 
-    box = latest_prior_nr7_box(hourly, i)
+    # ----- EXACT APP STAGE -----
+    if app_stablecoin(daily, current_price):
+        return None, None
+
+    box = find_nr7_daily(daily)
     if box is None:
-        return None
+        return None, None
     box_high, box_low = box
 
-    # Shared app + indicator confirmed breakout condition.
+    app_surge = exact_app_volume_surge(daily)
+    if app_surge is None or app_surge < cfg.app_minimum_surge:
+        return None, None
+
+    # Like the app, Binance's final row is the live current 1H candle.
+    signal_idx = len(hourly) - 2
+    if signal_idx < 1:
+        return None, None
+    c = hourly[signal_idx]
+    p = hourly[signal_idx - 1]
     if not (c.close > box_high and p.close <= box_high):
-        return None
+        return None, None
 
-    # APP CONDITIONS.
-    app_surge = app_volume_surge(hourly, i)
-    if app_surge is None or not (app_surge > cfg.app_minimum_surge):
-        return None
-    if is_stablecoin_at_signal(hourly, i):
-        return None
+    age_minutes = int(max(0, now_ms - c.close_time) // 60_000)
+    if cfg.max_confirmed_age_minutes >= 0 and age_minutes > cfg.max_confirmed_age_minutes:
+        return None, None
 
-    # INDICATOR CONDITIONS.
-    prior_volumes = [x.volume for x in hourly[i - cfg.indicator_volume_lookback:i]]
-    if len(prior_volumes) != cfg.indicator_volume_lookback:
-        return None
-    avg_vol = sum(prior_volumes) / len(prior_volumes)
-    if avg_vol <= 0:
-        return None
-    indicator_surge = c.volume / avg_vol
-    if indicator_surge < cfg.indicator_minimum_surge:
-        return None
+    close_time_utc = datetime.fromtimestamp(c.close_time / 1000, tz=timezone.utc).isoformat()
+
+    # ----- EXACT INDICATOR STAGE -----
+    prior_volumes = [x.volume for x in hourly[signal_idx - cfg.indicator_volume_lookback:signal_idx]]
+    indicator_surge = None
+    if len(prior_volumes) == cfg.indicator_volume_lookback:
+        avg_vol = sum(prior_volumes) / len(prior_volumes)
+        if avg_vol > 0:
+            indicator_surge = c.volume / avg_vol
 
     candle_range = c.high - c.low
     close_position = (c.close - c.low) / candle_range if candle_range > 0 else 0.0
-    if close_position < cfg.minimum_close_position:
-        return None
 
-    states = strong_pivot_state(hourly, cfg.swing_length)
-    current_high_is_strong, target = states[i]
-    if not current_high_is_strong or target is None or not (target > c.high):
-        return None
+    strong_state, target = strong_pivot_state(hourly[:signal_idx + 1], cfg.swing_length)
 
     risk = c.close - box_low
-    reward = target - c.close
-    if risk <= 0 or reward <= 0:
-        return None
-    rr = reward / risk
-    if not (rr > cfg.minimum_reward_risk and rr <= cfg.maximum_reward_risk):
-        return None
+    reward = (target - c.close) if target is not None else None
+    rr = (reward / risk) if reward is not None and risk > 0 else None
 
-    score, level = _confidence(indicator_surge, close_position, rr, cfg)
-    dt = datetime.fromtimestamp(c.close_time / 1000, tz=timezone.utc).isoformat()
-    return Signal(
+    failures: List[str] = []
+    if indicator_surge is None:
+        failures.append("Indicator volume baseline unavailable")
+    elif indicator_surge < cfg.indicator_minimum_surge:
+        failures.append(f"1H volume surge {indicator_surge:.2f}x < {cfg.indicator_minimum_surge:.2f}x")
+    if close_position < cfg.minimum_close_position:
+        failures.append(f"Close position {close_position:.3f} < {cfg.minimum_close_position:.2f}")
+    if not strong_state:
+        failures.append("Strong High state is false")
+    elif target is None:
+        failures.append("No confirmed unrevisited Strong High above the breakout candle")
+    if risk <= 0:
+        failures.append("Entry-to-box-low risk is not positive")
+    elif target is not None:
+        if rr is None or rr <= cfg.minimum_reward_risk:
+            failures.append(f"R:R {rr if rr is not None else 0:.2f} <= {cfg.minimum_reward_risk:.2f}")
+        elif rr > cfg.maximum_reward_risk:
+            failures.append(f"R:R {rr:.2f} > {cfg.maximum_reward_risk:.2f}")
+
+    candidate = {
+        "symbol": symbol,
+        "signal_close_ms": c.close_time,
+        "close_time_utc": close_time_utc,
+        "entry": c.close,
+        "tp": target,
+        "sl": box_low,
+        "rr": rr,
+        "box_high": box_high,
+        "box_low": box_low,
+        "app_volume_surge": app_surge,
+        "indicator_volume_surge": indicator_surge,
+        "close_position": close_position,
+        "confidence_score": None,
+        "confidence_level": None,
+        "age_minutes": age_minutes,
+        "app_pass": True,
+        "indicator_pass": not failures,
+        "reason": "; ".join(failures) if failures else None,
+    }
+
+    if failures:
+        return None, candidate
+
+    score, level = _confidence(float(indicator_surge), close_position, float(rr), cfg)
+    signal = Signal(
         symbol=symbol,
         signal_close_ms=c.close_time,
-        close_time_utc=dt,
+        close_time_utc=close_time_utc,
         entry=c.close,
-        tp=target,
+        tp=float(target),
         sl=box_low,
-        rr=rr,
+        rr=float(rr),
         box_high=box_high,
         box_low=box_low,
         app_volume_surge=app_surge,
-        indicator_volume_surge=indicator_surge,
+        indicator_volume_surge=float(indicator_surge),
         close_position=close_position,
         confidence_score=score,
         confidence_level=level,
     )
+    candidate["tp"] = signal.tp
+    candidate["rr"] = signal.rr
+    candidate["confidence_score"] = score
+    candidate["confidence_level"] = level
+    return signal, candidate
