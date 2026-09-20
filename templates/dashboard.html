@@ -15,7 +15,7 @@
   <div class="top">
     <div class="brand">
       <h1>NR7 Autonomous Demo Agent</h1>
-      <p>Exact App + Indicator + 1 &lt; R:R ≤ 4 · Binance Spot Testnet</p>
+      <p>Exact App + Indicator + 2 &lt; R:R &lt; 4 · Binance Spot Testnet</p>
     </div>
     <div class="controls">
       <span id="botPill" class="pill warn"><span class="dot"></span><span id="botText">Loading…</span></span>
@@ -179,7 +179,7 @@
       ['Execution',m.execution_ready?'<span class="good"><b>READY</b></span>':`<span class="bad"><b>NOT READY</b></span> ${esc(m.execution_error||'')}`],
       ['New entries',m.new_entries_enabled?'<span class="good"><b>ENABLED</b></span>':'<span class="warnc"><b>PAUSED</b></span>'],
       ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
-      ['Strategy','App + Indicator + 1 < R:R ≤ 4'],['Risk',`Max ${num(r.max_risk_per_trade_usdt,2)} USDT/trade · ${r.max_open_positions} max open`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
+      ['Strategy','App + Indicator + 2 < R:R < 4'],['Risk',`Max ${num(r.max_risk_per_trade_usdt,2)} USDT/trade · ${r.max_open_positions} max open`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
     ];
     $('engineBody').innerHTML=items.map(x=>`<tr><th style="width:180px">${x[0]}</th><td>${x[1]}</td></tr>`).join('');
     $('scanMeta').textContent=m.scan_in_progress?'Scanning market now…':`Last scan: ${date(m.last_scan_completed)}`;
