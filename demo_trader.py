@@ -635,8 +635,8 @@ def place_signal(
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="live price outside SL/TP interval", live_ask=live_ask, signal_key=key)
         return
     execution_rr = (sig.tp - live_ask) / (live_ask - sig.sl)
-    if not (execution_rr > 1.0 and execution_rr <= 4.0):
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="execution-time RR outside (1,4]", execution_rr=execution_rr, signal_key=key)
+    if not (execution_rr > 2.0 and execution_rr < 4.0):
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="execution-time RR outside (2,4)", execution_rr=execution_rr, signal_key=key)
         return
 
     open_risk = sum(float(p.get("risk_usdt", 0)) for p in state.get("open_positions", {}).values())
