@@ -77,7 +77,7 @@ class CloudDemoEngine:
             indicator_volume_lookback=168,
             indicator_minimum_surge=1.5,
             minimum_close_position=0.75,
-            minimum_reward_risk=1.0,
+            minimum_reward_risk=2.0,
             maximum_reward_risk=4.0,
             swing_length=50,
         )
