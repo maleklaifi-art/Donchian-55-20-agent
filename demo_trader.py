@@ -150,8 +150,8 @@ class PublicMarketClient:
         coins.sort(key=lambda row: row[2], reverse=True)
         return [(s, p) for (s, p, _) in coins[:max_symbols]]
 
-    def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
-        rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
+    @staticmethod
+    def _rows_to_candles(rows) -> List[Candle]:
         return [
             Candle(
                 open_time=int(r[0]), open=float(r[1]), high=float(r[2]), low=float(r[3]),
@@ -159,6 +159,54 @@ class PublicMarketClient:
             )
             for r in rows
         ]
+
+    def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
+        rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
+        return self._rows_to_candles(rows)
+
+    def all_klines(self, symbol: str, interval: str, max_bars: int = 100000) -> List[Candle]:
+        """Load available Binance history backwards for exact stateful Pine reconstruction.
+
+        This is intentionally used only after the lightweight app stage confirms a
+        candidate, so the Top-1000 hourly scan does not make thousands of extra requests.
+        """
+        chunks = []
+        end_time = None
+        total = 0
+
+        while total < max_bars:
+            params = {"symbol": symbol, "interval": interval, "limit": 1000}
+            if end_time is not None:
+                params["endTime"] = end_time
+
+            rows = self.get("/api/v3/klines", params)
+            if not rows:
+                break
+
+            chunks.append(rows)
+            total += len(rows)
+
+            first_open = int(rows[0][0])
+            if len(rows) < 1000 or first_open <= 0:
+                break
+
+            next_end = first_open - 1
+            if end_time is not None and next_end >= end_time:
+                break
+            end_time = next_end
+
+        merged = []
+        seen = set()
+        for rows in reversed(chunks):
+            for r in rows:
+                ot = int(r[0])
+                if ot not in seen:
+                    seen.add(ot)
+                    merged.append(r)
+        merged.sort(key=lambda r: int(r[0]))
+        if len(merged) > max_bars:
+            merged = merged[-max_bars:]
+        return self._rows_to_candles(merged)
 
     def best_ask(self, symbol: str) -> float:
         x = self.get("/api/v3/ticker/bookTicker", {"symbol": symbol})
@@ -421,7 +469,7 @@ def account_free(account: dict, asset: str) -> float:
 
 
 def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None, on_scan_rows=None) -> List[Signal]:
-    """Run exact app stage, preserve latest-scan categories, then apply the indicator."""
+    """Fast exact app scan; deep Pine reconstruction only for confirmed candidates."""
     coins = market.ranked_coins(cfg.quote_asset, cfg.max_symbols)
     now_ms = int(time.time() * 1000)
     signals: List[Signal] = []
@@ -430,10 +478,18 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
     scan_rows: List[Dict[str, Any]] = []
 
     def one(sym: str, price: float):
-        daily = market.klines(sym, "1d", 20)
-        hourly = market.klines(sym, "1h", cfg.hourly_history_bars)
-        trace = app_scan_trace(sym, daily, hourly, price, scfg, now_ms)
-        sig, candidate = evaluate_latest(sym, daily, hourly, price, scfg, now_ms)
+        # Match the phone app's lightweight stage.
+        daily_fast = market.klines(sym, "1d", 20)
+        hourly_fast = market.klines(sym, "1h", 10)
+        trace = app_scan_trace(sym, daily_fast, hourly_fast, price, scfg, now_ms)
+
+        if trace.get("status") != "CONFIRMED":
+            return trace, None, None
+
+        # Only confirmed app candidates pay the cost of full state reconstruction.
+        daily_deep = market.klines(sym, "1d", 1000)
+        hourly_deep = market.all_klines(sym, "1h", 100000)
+        sig, candidate = evaluate_latest(sym, daily_deep, hourly_deep, price, scfg, now_ms)
         return trace, sig, candidate
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.scan_workers)) as pool:
@@ -444,10 +500,12 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
                 trace, sig, candidate = fut.result()
 
                 if candidate is not None:
-                    trace["indicator_pass"] = sig is not None
+                    trace["indicator_pass"] = candidate.get("indicator_pass")
+                    trace["rr_gate_pass"] = candidate.get("rr_gate_pass")
                     trace["indicator_reason"] = None if sig is not None else candidate.get("reason")
                 else:
                     trace["indicator_pass"] = None
+                    trace["rr_gate_pass"] = None
                     trace["indicator_reason"] = None
                 scan_rows.append(trace)
 
@@ -463,7 +521,7 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
                             "TRADE_REJECTED",
                             symbol=candidate["symbol"],
                             signal_key=sk,
-                            reason=candidate.get("reason") or "indicator conditions failed",
+                            reason=candidate.get("reason") or "indicator/RR conditions failed",
                             app_volume_surge=candidate.get("app_volume_surge"),
                             indicator_volume_surge=candidate.get("indicator_volume_surge"),
                             close_position=candidate.get("close_position"),
@@ -486,7 +544,10 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
                         except Exception as callback_exc:
                             logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
             except Exception as exc:
-                scan_rows.append({"symbol":sym,"price":None,"category":"Error","reason":str(exc),"status":"FILTERED","app_volume_surge":None,"box_high":None,"box_low":None})
+                scan_rows.append({
+                    "symbol":sym,"price":None,"category":"Error","reason":str(exc),
+                    "status":"FILTERED","app_volume_surge":None,"box_high":None,"box_low":None
+                })
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
 
     scan_rows.sort(key=lambda x: x.get("symbol",""))
