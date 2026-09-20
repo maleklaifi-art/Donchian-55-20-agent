@@ -87,8 +87,8 @@
       <div class="field"><label>Indicator min volume surge</label><input id="setIndSurge" type="number" min="0.1" max="100" step="0.1"></div>
 
       <div class="field"><label>Minimum close position</label><input id="setClosePos" type="number" min="0" max="1" step="0.01"></div>
-      <div class="field"><label>Agent minimum R:R (strictly greater; Pine stays 1.0)</label><input id="setMinRR" type="number" min="0" max="20" step="0.1"></div>
-      <div class="field"><label>Maximum R:R</label><input id="setMaxRR" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field"><label>Agent minimum R:R (fixed, strict)</label><input id="setMinRR" type="number" value="2" disabled></div>
+      <div class="field"><label>Agent maximum R:R (fixed, strict)</label><input id="setMaxRR" type="number" value="4" disabled></div>
 
       <div class="field"><label>Swing length</label><input id="setSwing" type="number" min="10" max="500" step="1"></div>
       <div class="field"><label>Demo bankroll cap (USDT)</label><input id="setBankroll" type="number" min="10" max="1000000" step="1"></div>
@@ -235,7 +235,7 @@
     const payload={
       max_symbols:$('setMaxSymbols').value,scan_workers:$('setWorkers').value,max_confirmed_age_minutes:$('setAge').value,
       app_minimum_surge:$('setAppSurge').value,indicator_volume_lookback:$('setVolLookback').value,indicator_minimum_surge:$('setIndSurge').value,
-      minimum_close_position:$('setClosePos').value,minimum_reward_risk:$('setMinRR').value,maximum_reward_risk:$('setMaxRR').value,
+      minimum_close_position:$('setClosePos').value,
       swing_length:$('setSwing').value,demo_equity_cap_usdt:$('setBankroll').value,max_risk_per_trade_usdt:$('setRisk').value,
       max_open_positions:$('setOpen').value,daily_loss_limit_r:$('setDailyLoss').value,max_entry_drift_pct:$('setDrift').value
     };
