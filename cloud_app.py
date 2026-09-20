@@ -137,8 +137,6 @@ class CloudDemoEngine:
             "indicator_volume_lookback": (int, 1, 500),
             "indicator_minimum_surge": (float, 0.1, 100.0),
             "minimum_close_position": (float, 0.0, 1.0),
-            "minimum_reward_risk": (float, 0.0, 20.0),
-            "maximum_reward_risk": (float, 0.1, 20.0),
             "swing_length": (int, 10, 500),
             "demo_equity_cap_usdt": (float, 10.0, 1000000.0),
             "max_risk_per_trade_usdt": (float, 0.01, 100000.0),
@@ -158,18 +156,13 @@ class CloudDemoEngine:
                 raise ValueError(f"{key} must be between {lo} and {hi}")
             parsed[key] = value
 
-        min_rr = parsed.get("minimum_reward_risk", self.scfg.minimum_reward_risk)
-        max_rr = parsed.get("maximum_reward_risk", self.scfg.maximum_reward_risk)
-        if max_rr <= min_rr:
-            raise ValueError("maximum_reward_risk must be greater than minimum_reward_risk")
-
         with self.meta_lock:
             for key in ("max_symbols","scan_workers","max_confirmed_age_minutes","demo_equity_cap_usdt",
                         "max_risk_per_trade_usdt","max_open_positions","daily_loss_limit_r","max_entry_drift_pct"):
                 if key in parsed:
                     setattr(self.cfg, key, parsed[key])
             for key in ("app_minimum_surge","indicator_volume_lookback","indicator_minimum_surge",
-                        "minimum_close_position","minimum_reward_risk","maximum_reward_risk","swing_length"):
+                        "minimum_close_position","swing_length"):
                 if key in parsed:
                     setattr(self.scfg, key, parsed[key])
 
@@ -411,11 +404,14 @@ if SETTINGS_PATH.exists():
     try:
         saved_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         for key in ("app_minimum_surge","indicator_volume_lookback","indicator_minimum_surge",
-                    "minimum_close_position","minimum_reward_risk","maximum_reward_risk","swing_length"):
+                    "minimum_close_position","swing_length"):
             if key in saved_settings and hasattr(engine.scfg, key):
                 setattr(engine.scfg, key, saved_settings[key])
     except Exception:
         pass
+engine.scfg.pine_minimum_reward_risk = 1.0
+engine.scfg.minimum_reward_risk = 2.0
+engine.scfg.maximum_reward_risk = 4.0
 if not as_bool(os.getenv("AUTO_START_NEW_TRADES"), False):
     Path(cfg.kill_switch_file).write_text("Safe startup: new entries paused. Use dashboard START.\n", encoding="utf-8")
 if as_bool(os.getenv("START_ENGINE"), True):
