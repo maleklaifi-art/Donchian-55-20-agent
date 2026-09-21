@@ -76,15 +76,30 @@ class Evaluation:
     signal: Optional[Signal] = None
     rejection_stage: Optional[str] = None
     rejection_reason: Optional[str] = None
+    indicator_volume_surge: Optional[float] = None
+    close_position: Optional[float] = None
+    rr: Optional[float] = None
+    app_volume_surge: Optional[float] = None
 
     def filtered_dict(self):
-        return {
+        row = {
             "symbol": self.symbol,
             "price": self.price,
             "stage": self.rejection_stage or "Unknown",
             "reason": self.rejection_reason or "No valid signal",
             "phase_one_passed": self.phase_one is not None,
         }
+        if self.phase_one is not None:
+            row.update(self.phase_one.to_dict())
+        if self.indicator_volume_surge is not None:
+            row["indicator_volume_surge"] = self.indicator_volume_surge
+        if self.close_position is not None:
+            row["close_position"] = self.close_position
+        if self.rr is not None:
+            row["rr"] = self.rr
+        if self.app_volume_surge is not None:
+            row["app_volume_surge"] = self.app_volume_surge
+        return row
 
 
 def is_closed(c: Candle, now_ms: int) -> bool:
@@ -293,8 +308,19 @@ def evaluate_latest_detailed(
     hourly = [c for c in hourly if is_closed(c, now_ms)]
     price = hourly[-1].close if hourly else 0.0
 
-    def reject(stage: str, reason: str, phase_one: Optional[PhaseOneSignal] = None) -> Evaluation:
-        return Evaluation(symbol, price, phase_one, None, stage, reason)
+    def reject(
+        stage: str,
+        reason: str,
+        phase_one: Optional[PhaseOneSignal] = None,
+        indicator_volume_surge: Optional[float] = None,
+        close_position: Optional[float] = None,
+        rr: Optional[float] = None,
+        app_volume_surge: Optional[float] = None,
+    ) -> Evaluation:
+        return Evaluation(
+            symbol, price, phase_one, None, stage, reason,
+            indicator_volume_surge, close_position, rr, app_volume_surge,
+        )
 
     min_bars = max(cfg.indicator_volume_lookback + 2, cfg.swing_length * 2 + 3, 24 * 10)
     if len(hourly) < min_bars:
@@ -320,7 +346,11 @@ def evaluate_latest_detailed(
     if app_surge is None:
         return reject("App Volume", "Insufficient prior daily quote-volume baseline")
     if not (app_surge > cfg.app_minimum_surge):
-        return reject("App Volume", f"{app_surge:.4f}x is not strictly > {cfg.app_minimum_surge:g}x")
+        return reject(
+            "App Volume",
+            f"{app_surge:.4f}x is not strictly > {cfg.app_minimum_surge:g}x",
+            app_volume_surge=app_surge,
+        )
     if is_stablecoin_at_signal(hourly, i):
         return reject("Stablecoin", "Saved app stablecoin / low-volatility filter")
 
@@ -349,6 +379,7 @@ def evaluate_latest_detailed(
             "Indicator Volume",
             f"{indicator_surge:.4f}x < {cfg.indicator_minimum_surge:g}x",
             phase_one,
+            indicator_surge,
         )
 
     candle_range = c.high - c.low
@@ -358,24 +389,28 @@ def evaluate_latest_detailed(
             "Close Position",
             f"{close_position:.4f} < {cfg.minimum_close_position:g}",
             phase_one,
+            indicator_surge,
+            close_position,
         )
 
     states = strong_pivot_state(hourly, cfg.swing_length)
     current_high_is_strong, strong_high_filter = states[i]
     if not current_high_is_strong:
-        return reject("Strong High", "LuxAlgo-compatible Strong High state is not active", phase_one)
+        return reject("Strong High", "LuxAlgo-compatible Strong High state is not active", phase_one, indicator_surge, close_position)
     if strong_high_filter is None or not (strong_high_filter > c.high):
         return reject(
             "Strong High Filter",
             "No confirmed unrevisited pivot high above the breakout candle",
             phase_one,
+            indicator_surge,
+            close_position,
         )
 
     # Strong High remains an entry filter only. The actual TP is Classic
     # Pivot R2 from the immediately previous completed UTC daily candle.
     previous_daily = previous_completed_daily(hourly, i)
     if previous_daily is None:
-        return reject("Pivot R2", "No previous completed UTC daily candle", phase_one)
+        return reject("Pivot R2", "No previous completed UTC daily candle", phase_one, indicator_surge, close_position)
     classic_pivot = (previous_daily.high + previous_daily.low + previous_daily.close) / 3.0
     pivot_r2_target = classic_pivot + (previous_daily.high - previous_daily.low)
     if not (pivot_r2_target > c.high):
@@ -383,18 +418,23 @@ def evaluate_latest_detailed(
             "Pivot R2",
             f"Previous-day Pivot R2 {pivot_r2_target:.12g} is not above breakout high {c.high:.12g}",
             phase_one,
+            indicator_surge,
+            close_position,
         )
 
     risk = c.close - box_low
     reward = pivot_r2_target - c.close
     if risk <= 0 or reward <= 0:
-        return reject("R:R", "Non-positive risk or reward", phase_one)
+        return reject("R:R", "Non-positive risk or reward", phase_one, indicator_surge, close_position)
     rr = reward / risk
     if not reward_risk_is_accepted(rr, cfg.minimum_reward_risk, cfg.maximum_reward_risk):
         return reject(
             "R:R",
             f"{rr:.4f} is outside inclusive [{cfg.minimum_reward_risk:g}, {cfg.maximum_reward_risk:g}]",
             phase_one,
+            indicator_surge,
+            close_position,
+            rr,
         )
 
     score, level = _confidence(indicator_surge, close_position, rr, cfg)

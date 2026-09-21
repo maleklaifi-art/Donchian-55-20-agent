@@ -41,6 +41,11 @@ def as_bool(value: Optional[str], default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def next_hour_boundary(now_seconds: float) -> int:
+    """Next exact UTC hour boundary as an epoch second."""
+    return (int(now_seconds // 3600) + 1) * 3600
+
+
 class DashboardLogger(EventLogger):
     def __init__(self, path: str, db: TradeDatabase):
         super().__init__(path)
@@ -102,6 +107,7 @@ class CloudDemoEngine:
             "error_count": 0,
             "phase_one": [],
             "signals": [],
+            "rejected": [],
             "filtered": [],
         }
         self.telegram_alerted_file = Path(cfg.signal_log).with_name("telegram_alerted.json")
@@ -161,7 +167,7 @@ class CloudDemoEngine:
         while not self.stop_event.is_set():
             self._run_scan()
             now = time.time()
-            next_hour = (int(now // 3600) + 1) * 3600 + 10
+            next_hour = next_hour_boundary(now)
             with self.meta_lock:
                 self.next_scan_at_ms = int(next_hour * 1000)
             self.scan_wakeup.clear()
@@ -363,7 +369,9 @@ class CloudDemoEngine:
             "open_trades": open_trades,
             "closed_trades": self.db.closed_trades(100),
             "rejected_signals": self.db.signals("REJECTED", 60),
+            "indicator_rejections": self.last_scan_snapshot.get("rejected", []),
             "filter_rejections": self.last_scan_snapshot.get("filtered", []),
+            "trade_signals": self.last_scan_snapshot.get("phase_one", []),
             "recent_signals": self.db.signals(None, 60),
             "recent_events": self.db.recent_events(60),
             "scan": self.last_scan_snapshot,

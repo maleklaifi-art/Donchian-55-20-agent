@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from strategy import (
     Candle,
@@ -37,7 +38,7 @@ TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
 @dataclass
 class BotConfig:
     max_symbols: int = 1000
-    scan_workers: int = 8
+    scan_workers: int = 50
     hourly_history_bars: int = 1000
     quote_asset: str = "USDT"
 
@@ -113,6 +114,10 @@ class PublicMarketClient:
         self.timeout_s = timeout_s
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
+        # Keep enough reusable connections for the scanner's parallel workers.
+        # This changes transport latency only; strategy calculations are untouched.
+        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=0)
+        self.s.mount("https://", adapter)
 
     def get(self, path: str, params: Optional[dict] = None):
         last_error = None
@@ -457,6 +462,7 @@ def scan_market_detailed(
     now_ms = int(time.time() * 1000)
     signals: List[Signal] = []
     phase_one = []
+    rejected = []
     filtered = []
     errors = 0
     started = time.monotonic()
@@ -483,7 +489,15 @@ def scan_market_detailed(
             try:
                 evaluation: Evaluation = fut.result()
                 if evaluation.phase_one:
-                    phase_one.append(evaluation.phase_one.to_dict())
+                    candidate = evaluation.phase_one.to_dict()
+                    candidate["status"] = "VALID" if evaluation.signal else "INDICATOR_REJECTED"
+                    if evaluation.indicator_volume_surge is not None:
+                        candidate["indicator_volume_surge"] = evaluation.indicator_volume_surge
+                    if evaluation.close_position is not None:
+                        candidate["close_position"] = evaluation.close_position
+                    if evaluation.rr is not None:
+                        candidate["rr"] = evaluation.rr
+                    phase_one.append(candidate)
                 if evaluation.signal:
                     sig = evaluation.signal
                     signals.append(sig)
@@ -493,20 +507,16 @@ def scan_market_detailed(
                             on_signal(sig)
                         except Exception as callback_exc:
                             logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
-                else:
+                elif evaluation.phase_one:
+                    rejected.append(evaluation.filtered_dict())
+                elif evaluation.rejection_stage == "App Volume":
                     filtered.append(evaluation.filtered_dict())
             except Exception as exc:
                 errors += 1
-                filtered.append({
-                    "symbol": sym,
-                    "price": 0.0,
-                    "stage": "Data",
-                    "reason": f"{type(exc).__name__}: {exc}",
-                    "phase_one_passed": False,
-                })
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
     signals.sort(key=lambda x: x.signal_close_ms)
     phase_one.sort(key=lambda x: x["symbol"])
+    rejected.sort(key=lambda x: x["symbol"])
     filtered.sort(key=lambda x: x["symbol"])
     Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in signals], indent=2), encoding="utf-8")
     duration = time.monotonic() - started
@@ -522,6 +532,7 @@ def scan_market_detailed(
         "error_count": errors,
         "phase_one": phase_one,
         "signals": [x.to_dict() for x in signals],
+        "rejected": rejected,
         "filtered": filtered,
     }
     logger.emit(
@@ -529,7 +540,8 @@ def scan_market_detailed(
         symbols=len(symbols),
         app_confirmed=len(phase_one),
         valid_signals=len(signals),
-        rejected=len(filtered),
+        rejected=len(rejected),
+        filtered=len(filtered),
         errors=errors,
         duration_seconds=round(duration, 3),
     )

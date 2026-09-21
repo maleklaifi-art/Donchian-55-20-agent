@@ -13,7 +13,7 @@ from demo_trader import (
 )
 from runtime_settings import SettingsStore
 import strategy
-from strategy import Candle, StrategyConfig, evaluate_latest, previous_completed_daily, reward_risk_is_accepted
+from strategy import Candle, Evaluation, PhaseOneSignal, StrategyConfig, evaluate_latest, previous_completed_daily, reward_risk_is_accepted
 
 
 def test_rounding():
@@ -33,6 +33,24 @@ def test_reward_risk_boundaries_are_inclusive():
     assert reward_risk_is_accepted(3.0)
     assert reward_risk_is_accepted(4.0)
     assert not reward_risk_is_accepted(4.0000001)
+
+
+def test_display_diagnostics_preserve_app_and_indicator_values():
+    phase_one = PhaseOneSignal("TESTUSDT", 1, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.1)
+    evaluation = Evaluation(
+        "TESTUSDT", 10, phase_one, None, "Indicator Volume", "1.2x < 1.5x",
+        indicator_volume_surge=1.2,
+    )
+    row = evaluation.filtered_dict()
+    assert row["phase_one_passed"] is True
+    assert row["app_volume_surge"] == 2.1
+    assert row["indicator_volume_surge"] == 1.2
+
+
+def test_fast_default_and_exact_hour_schedule_label():
+    settings = SettingsStore("/path/that/does/not/exist/settings.json").get()
+    assert settings.scan_workers == 50
+    assert settings.public_dict()["schedule"] == "Hourly at HH:00 UTC"
 
 
 def test_previous_completed_daily_uses_immediately_prior_utc_day():

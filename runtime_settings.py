@@ -13,7 +13,7 @@ from typing import Any, Dict
 class RuntimeSettings:
     top_n: int = 1000
     hourly_history_bars: int = 1000
-    scan_workers: int = 8
+    scan_workers: int = 50
     app_minimum_surge: float = 1.5
     indicator_volume_lookback: int = 168
     indicator_minimum_surge: float = 1.5
@@ -29,7 +29,7 @@ class RuntimeSettings:
         data = asdict(self)
         data["telegram_bot_token"] = ""
         data["telegram_token_configured"] = bool(self.telegram_bot_token)
-        data["schedule"] = "Hourly at HH:00:10 UTC"
+        data["schedule"] = "Hourly at HH:00 UTC"
         return data
 
 

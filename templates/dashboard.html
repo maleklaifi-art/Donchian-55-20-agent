@@ -45,14 +45,16 @@
     <div class="section-head">
       <h2>Trade history & signals</h2>
       <div class="tabs">
-        <button class="tab active" data-tab="closed" type="button">Closed</button>
+        <button class="tab" data-tab="closed" type="button">Closed</button>
         <button class="tab" data-tab="rejected" type="button">Rejected</button>
-        <button class="tab" data-tab="signals" type="button">Signals</button>
+        <button class="tab active" data-tab="signals" type="button">Signals</button>
+        <button class="tab" data-tab="filtered" type="button">Filtered</button>
       </div>
     </div>
-    <div id="closedPanel" class="table-wrap"></div>
+    <div id="closedPanel" class="table-wrap hidden"></div>
     <div id="rejectedPanel" class="table-wrap hidden"></div>
-    <div id="signalsPanel" class="table-wrap hidden"></div>
+    <div id="signalsPanel" class="table-wrap"></div>
+    <div id="filteredPanel" class="table-wrap hidden"></div>
   </section>
 
   <section class="section">
@@ -128,7 +130,13 @@
   }
   function renderRejected(rows){
     $('rejectedPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Stage',r=>esc(r.stage||'Execution')],['Price',r=>num(r.price,8)],['App passed',r=>r.phase_one_passed?'Yes':'No'],['Reason',r=>`<span class="bad">${esc(r.reason||'Rejected')}</span>`]
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Reason',r=>`<span class="bad">${esc(r.reason||'Rejected')}</span>`]
+    ],rows);
+  }
+
+  function renderFiltered(rows){
+    $('filteredPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Price',r=>num(r.price,8)],['Stage',r=>esc(r.stage||'App Volume')],['App Vol',r=>r.app_volume_surge==null?'—':`${num(r.app_volume_surge,2)}x`],['Reason',r=>`<span class="warnc">${esc(r.reason||'Did not pass App volume')}</span>`]
     ],rows);
   }
 
@@ -143,7 +151,7 @@
   }
   function renderSignals(rows){
     $('signalsPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Status',r=>esc(r.status)],['Time',r=>date(r.close_time_utc)],['Entry',r=>num(r.entry,8)],['TP (R2)',r=>num(r.tp,8)],['Classic Pivot',r=>num(r.classic_pivot,8)],['Strong filter',r=>num(r.strong_high_filter,8)],['SL',r=>num(r.sl,8)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Confidence',r=>`${esc(r.confidence_level||'—')} ${r.confidence_score??''}`]
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['Status',r=>r.status==='VALID'?'<span class="good"><b>VALID</b></span>':'<span class="bad"><b>INDICATOR REJECTED</b></span>'],['Entry',r=>num(r.entry,8)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>r.indicator_volume_surge==null?'—':`${num(r.indicator_volume_surge,2)}x`]
     ],rows);
   }
 
@@ -153,7 +161,8 @@
       ['Execution',m.execution_ready?'<span class="good"><b>READY</b></span>':`<span class="bad"><b>NOT READY</b></span> ${esc(m.execution_error||'')}`],
       ['New entries',m.new_entries_enabled?'<span class="good"><b>ENABLED</b></span>':'<span class="warnc"><b>PAUSED</b></span>'],
       ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
-      ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.app_confirmed_count} App confirmed · ${d.scan.valid_count} valid · ${num(d.scan.duration_seconds,2)}s`],
+      ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.app_confirmed_count} signals · ${d.scan.indicator_rejected_count} rejected · ${d.scan.filtered.length} filtered · ${num(d.scan.duration_seconds,2)}s`],
+      ['Schedule','Every hour at H:00 UTC'],
       ['Strategy',`App + Pivot-R2 Pine + ${num(d.settings.minimum_reward_risk,2)} ≤ R:R ≤ ${num(d.settings.maximum_reward_risk,2)}`],
       ['Risk',`${num(r.risk_per_trade_usdt,2)} USDT/trade · max ${r.max_open_positions} position · max ${r.max_trades_per_utc_day} trade/day`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
     ];
@@ -176,7 +185,7 @@
     setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
     $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`${num(r.risk_per_trade_usdt,2)} USDT/trade · ${num(r.max_total_open_risk_usdt,2)} USDT max`;
-    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.filter_rejections); renderSignals(d.recent_signals); renderEngine(d); renderSettings(d.settings);
+    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.indicator_rejections); renderSignals(d.trade_signals); renderFiltered(d.filter_rejections); renderEngine(d); renderSettings(d.settings);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');
   }
@@ -199,7 +208,7 @@
   $('saveSettingsBtn').addEventListener('click',saveSettings);
   document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');
-    ['closed','rejected','signals'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
+    ['closed','rejected','signals','filtered'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
   }));
   refresh(); setInterval(refresh,5000);
 })();

@@ -108,7 +108,14 @@ After the one-time deployment:
 1. Open the cloud dashboard URL.
 2. Log in with `DASHBOARD_PASSWORD`.
 3. Confirm that Testnet execution says **READY**. New demo entries start automatically when `AUTO_START_NEW_TRADES=true`.
-4. Close the browser if you want. The cloud agent continues scanning at every `HH:00:10 UTC` and can execute at most one demo trade per UTC day.
+4. Close the browser if you want. The cloud agent continues scanning at every exact `HH:00 UTC` boundary and can execute at most one demo trade per UTC day.
+
+## Dashboard terms
+
+- **Signals** — closed 1H breakouts that passed the App volume-surge gate.
+- **Filtered** — breakouts that did not pass the App volume-surge gate.
+- **Rejected** — App signals that were rejected by one of the indicator rules.
+- **Closed** — Testnet trades that the cloud agent opened and later closed at TP or SL. This category exists only on the cloud agent.
 
 No PowerShell, terminal, ChatGPT session, or home PC is required for normal operation.
 
