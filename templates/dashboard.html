@@ -6,8 +6,8 @@
 <title>NR7 Demo Agent</title>
 <style>
 :root{color-scheme:dark;--bg:#070b14;--panel:#0f172a;--panel2:#111827;--border:#243045;--text:#e5e7eb;--muted:#94a3b8;--good:#34d399;--bad:#fb7185;--warn:#fbbf24;--accent:#60a5fa;--accent2:#2563eb}
-*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:linear-gradient(180deg,#0b1220 0,#070b14 260px);color:var(--text)}button,input,select{font:inherit}.wrap{width:min(1500px,100%);margin:0 auto;padding:20px}.top{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}.brand h1{font-size:24px;margin:0 0 4px}.brand p{margin:0;color:var(--muted);font-size:13px}.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;color:white;background:#172033}.btn.start{background:#063c2b;border-color:#0f6b4a;color:#a7f3d0}.btn.stop{background:#47161f;border-color:#7f1d1d;color:#fecdd3}.btn.secondary{background:#111827}.btn:disabled{opacity:.5;cursor:not-allowed}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:999px;padding:7px 11px;font-size:12px;font-weight:800}.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}.pill.good .dot{background:var(--good);box-shadow:0 0 10px rgba(52,211,153,.5)}.pill.bad .dot{background:var(--bad)}.pill.warn .dot{background:var(--warn)}.warning{background:#3a1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;margin-bottom:15px;font-size:13px}.errorbar{display:none;background:#3a1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;margin-bottom:15px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.stat{background:rgba(15,23,42,.92);border:1px solid var(--border);border-radius:14px;padding:14px;min-width:0}.stat .k{color:var(--muted);font-size:12px;margin-bottom:8px}.stat .v{font-weight:850;font-size:22px;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stat .s{color:var(--muted);font-size:11px;margin-top:5px}.good{color:var(--good)}.bad{color:var(--bad)}.warnc{color:var(--warn)}.section{margin-top:18px;background:rgba(15,23,42,.75);border:1px solid var(--border);border-radius:16px;overflow:hidden}.section-head{padding:15px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.section-head h2{font-size:16px;margin:0}.section-head .meta{font-size:12px;color:var(--muted)}.cards{padding:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.trade{background:#0b1220;border:1px solid #263247;border-radius:13px;padding:14px}.trade-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.symbol{font-weight:900;font-size:17px}.status{font-size:11px;padding:5px 8px;border-radius:999px;font-weight:900}.status.open{background:#083c2d;color:#a7f3d0}.status.win{background:#083c2d;color:#a7f3d0}.status.loss{background:#461923;color:#fecdd3}.kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:13px}.kv div{min-width:0}.kv span{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}.kv b{font-size:13px;word-break:break-word}.pnl{font-size:20px;font-weight:900;margin-top:13px}.ruleline{margin-top:12px;padding-top:11px;border-top:1px solid #1e293b;display:flex;gap:7px;flex-wrap:wrap}.tag{font-size:10px;font-weight:800;padding:4px 6px;border-radius:7px;background:#172033;color:#cbd5e1}.tag.pass{background:#073a2a;color:#a7f3d0}.empty{padding:28px;color:var(--muted);text-align:center}.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;min-width:900px}.table th,.table td{padding:11px 12px;border-bottom:1px solid #1e293b;text-align:left;font-size:12px}.table th{color:#94a3b8;font-size:11px;position:sticky;top:0;background:#0f172a}.tabs{display:flex;gap:6px;flex-wrap:wrap}.tab{padding:7px 10px;border:1px solid #334155;border-radius:9px;background:#101827;color:#cbd5e1;cursor:pointer;font-size:12px}.tab.active{background:#1d4ed8;border-color:#2563eb;color:white}.footer{padding:20px 2px;color:var(--muted);font-size:11px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.hidden{display:none!important}.settings-grid{padding:16px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.field label{display:block;color:var(--muted);font-size:11px;font-weight:800;margin-bottom:6px}.field input{width:100%;border:1px solid #334155;border-radius:9px;background:#0b1220;color:var(--text);padding:10px 11px}.field input:focus{outline:2px solid #2563eb;outline-offset:1px}.settings-actions{padding:0 16px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.settings-note{font-size:11px;color:var(--muted)}.saveok{color:var(--good);font-size:12px;font-weight:800}
-@media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.wrap{padding:12px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cards{grid-template-columns:1fr}.stat .v{font-size:19px}.top{align-items:flex-start}.controls{width:100%}.btn{flex:1}.section{border-radius:12px}.settings-grid{grid-template-columns:1fr}}
+*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;background:linear-gradient(180deg,#0b1220 0,#070b14 260px);color:var(--text)}button,input,select{font:inherit}.wrap{width:min(1500px,100%);margin:0 auto;padding:20px}.top{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}.brand h1{font-size:24px;margin:0 0 4px}.brand p{margin:0;color:var(--muted);font-size:13px}.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-weight:800;cursor:pointer;color:white;background:#172033}.btn.start{background:#063c2b;border-color:#0f6b4a;color:#a7f3d0}.btn.stop{background:#47161f;border-color:#7f1d1d;color:#fecdd3}.btn.secondary{background:#111827}.btn:disabled{opacity:.5;cursor:not-allowed}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border);border-radius:999px;padding:7px 11px;font-size:12px;font-weight:800}.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}.pill.good .dot{background:var(--good);box-shadow:0 0 10px rgba(52,211,153,.5)}.pill.bad .dot{background:var(--bad)}.pill.warn .dot{background:var(--warn)}.warning{background:#3a1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;margin-bottom:15px;font-size:13px}.errorbar{display:none;background:#3a1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px 12px;border-radius:10px;margin-bottom:15px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.stat{background:rgba(15,23,42,.92);border:1px solid var(--border);border-radius:14px;padding:14px;min-width:0}.stat .k{color:var(--muted);font-size:12px;margin-bottom:8px}.stat .v{font-weight:850;font-size:22px;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stat .s{color:var(--muted);font-size:11px;margin-top:5px}.good{color:var(--good)}.bad{color:var(--bad)}.warnc{color:var(--warn)}.section{margin-top:18px;background:rgba(15,23,42,.75);border:1px solid var(--border);border-radius:16px;overflow:hidden}.section-head{padding:15px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.section-head h2{font-size:16px;margin:0}.section-head .meta{font-size:12px;color:var(--muted)}.cards{padding:14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.trade{background:#0b1220;border:1px solid #263247;border-radius:13px;padding:14px}.trade-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.symbol{font-weight:900;font-size:17px}.status{font-size:11px;padding:5px 8px;border-radius:999px;font-weight:900}.status.open{background:#083c2d;color:#a7f3d0}.status.win{background:#083c2d;color:#a7f3d0}.status.loss{background:#461923;color:#fecdd3}.kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:13px}.kv div{min-width:0}.kv span{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}.kv b{font-size:13px;word-break:break-word}.pnl{font-size:20px;font-weight:900;margin-top:13px}.ruleline{margin-top:12px;padding-top:11px;border-top:1px solid #1e293b;display:flex;gap:7px;flex-wrap:wrap}.tag{font-size:10px;font-weight:800;padding:4px 6px;border-radius:7px;background:#172033;color:#cbd5e1}.tag.pass{background:#073a2a;color:#a7f3d0}.empty{padding:28px;color:var(--muted);text-align:center}.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;min-width:900px}.table th,.table td{padding:11px 12px;border-bottom:1px solid #1e293b;text-align:left;font-size:12px}.table th{color:#94a3b8;font-size:11px;position:sticky;top:0;background:#0f172a}.tabs{display:flex;gap:6px;flex-wrap:wrap}.tab{padding:7px 10px;border:1px solid #334155;border-radius:9px;background:#101827;color:#cbd5e1;cursor:pointer;font-size:12px}.tab.active{background:#1d4ed8;border-color:#2563eb;color:white}.footer{padding:20px 2px;color:var(--muted);font-size:11px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.hidden{display:none!important}.settings-grid{padding:14px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.field label{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.field input{width:100%;background:#0b1220;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px}.check{display:flex;gap:8px;align-items:center;padding-top:23px}.check input{width:auto}.settings-actions{padding:0 14px 14px;display:flex;gap:10px;align-items:center}.settings-note{font-size:11px;color:var(--muted)}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.wrap{padding:12px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cards{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}.stat .v{font-size:19px}.top{align-items:flex-start}.controls{width:100%}.btn{flex:1}.section{border-radius:12px}}
 </style>
 </head>
 <body>
@@ -15,13 +15,12 @@
   <div class="top">
     <div class="brand">
       <h1>NR7 Autonomous Demo Agent</h1>
-      <p>Exact App + Indicator + 2 &lt; R:R &lt; 4 · Binance Spot Testnet</p>
+      <p>Exact App + Pivot-R2 Pine · 2 ≤ R:R ≤ 4 · Binance Spot Testnet</p>
     </div>
     <div class="controls">
       <span id="botPill" class="pill warn"><span class="dot"></span><span id="botText">Loading…</span></span>
       <button id="startBtn" class="btn start" type="button">START NEW TRADES</button>
       <button id="stopBtn" class="btn stop" type="button">STOP NEW TRADES</button>
-      <button id="settingsBtn" class="btn secondary" type="button">SETTINGS</button>
       <form method="post" action="/logout"><button class="btn secondary" type="submit">Logout</button></form>
     </div>
   </div>
@@ -29,20 +28,12 @@
   <div id="errorbar" class="errorbar"></div>
 
   <div class="grid">
-    <div class="stat"><div class="k">Scanned</div><div id="scanCount" class="v">—</div><div class="s">Latest scan</div></div>
-    <div class="stat"><div class="k">Filtered</div><div id="filteredCount" class="v">—</div><div class="s">Failed app stage</div></div>
-    <div class="stat"><div class="k">App confirmed</div><div id="appConfirmedCount" class="v">—</div><div class="s">Passed app</div></div>
-    <div class="stat"><div class="k">Indicator passed</div><div id="indicatorPassedCount" class="v">—</div><div class="s">Passed full indicator</div></div>
-    <div class="stat"><div class="k">Indicator rejected</div><div id="indicatorRejectedCount" class="v">—</div><div class="s">App pass, indicator fail</div></div>
-  </div>
-
-  <div class="grid" style="margin-top:12px">
     <div class="stat"><div class="k">Demo equity estimate</div><div id="equity" class="v">—</div><div id="freeUsdt" class="s">Testnet balance</div></div>
     <div class="stat"><div class="k">Open P&L</div><div id="openPnl" class="v">—</div><div id="openCount" class="s">0 open</div></div>
     <div class="stat"><div class="k">Realized P&L</div><div id="realizedPnl" class="v">—</div><div id="realizedR" class="s">0R</div></div>
     <div class="stat"><div class="k">Today</div><div id="todayPnl" class="v">—</div><div id="todayR" class="s">0R</div></div>
     <div class="stat"><div class="k">Win rate</div><div id="winRate" class="v">—</div><div id="winLoss" class="s">0W / 0L</div></div>
-    <div class="stat"><div class="k">Open risk</div><div id="openRisk" class="v">—</div><div id="riskLimits" class="s">1% / trade</div></div>
+    <div class="stat"><div class="k">Open risk</div><div id="openRisk" class="v">—</div><div id="riskLimits" class="s">$2 maximum / trade</div></div>
   </div>
 
   <section class="section">
@@ -57,13 +48,11 @@
         <button class="tab active" data-tab="closed" type="button">Closed</button>
         <button class="tab" data-tab="rejected" type="button">Rejected</button>
         <button class="tab" data-tab="signals" type="button">Signals</button>
-        <button class="tab" data-tab="filtered" type="button">Filtered</button>
       </div>
     </div>
     <div id="closedPanel" class="table-wrap"></div>
     <div id="rejectedPanel" class="table-wrap hidden"></div>
     <div id="signalsPanel" class="table-wrap hidden"></div>
-    <div id="filteredPanel" class="table-wrap hidden"></div>
   </section>
 
   <section class="section">
@@ -71,38 +60,24 @@
     <div class="table-wrap"><table class="table"><tbody id="engineBody"></tbody></table></div>
   </section>
 
-
-  <section id="settingsSection" class="section hidden">
-    <div class="section-head">
-      <h2>Agent settings</h2>
-      <div class="meta">Saved to persistent /data storage</div>
-    </div>
+  <section class="section">
+    <div class="section-head"><h2>Scanner settings</h2><div class="meta">Saved values apply to the next scan</div></div>
     <div class="settings-grid">
-      <div class="field"><label>Top N symbols</label><input id="setMaxSymbols" type="number" min="1" max="1000" step="1"></div>
-      <div class="field"><label>Max concurrent requests</label><input id="setWorkers" type="number" min="1" max="50" step="1"></div>
-      <div class="field"><label>Max confirmed age (min)</label><input id="setAge" type="number" min="0" max="59" step="1"></div>
-
-      <div class="field"><label>App min volume surge</label><input id="setAppSurge" type="number" min="0.1" max="100" step="0.1"></div>
-      <div class="field"><label>Indicator volume lookback</label><input id="setVolLookback" type="number" min="1" max="500" step="1"></div>
-      <div class="field"><label>Indicator min volume surge</label><input id="setIndSurge" type="number" min="0.1" max="100" step="0.1"></div>
-
-      <div class="field"><label>Minimum close position</label><input id="setClosePos" type="number" min="0" max="1" step="0.01"></div>
-      <div class="field"><label>Agent minimum R:R (fixed, strict)</label><input id="setMinRR" type="number" value="2" disabled></div>
-      <div class="field"><label>Agent maximum R:R (fixed, strict)</label><input id="setMaxRR" type="number" value="4" disabled></div>
-
-      <div class="field"><label>Swing length</label><input id="setSwing" type="number" min="10" max="500" step="1"></div>
-      <div class="field"><label>Demo bankroll cap (USDT)</label><input id="setBankroll" type="number" min="10" max="1000000" step="1"></div>
-      <div class="field"><label>Max risk per trade (USDT)</label><input id="setRisk" type="number" min="0.01" max="100000" step="0.01"></div>
-
-      <div class="field"><label>Max open positions</label><input id="setOpen" type="number" min="1" max="20" step="1"></div>
-      <div class="field"><label>Daily loss limit (R)</label><input id="setDailyLoss" type="number" min="0.1" max="100" step="0.1"></div>
-      <div class="field"><label>Max entry drift (%)</label><input id="setDrift" type="number" min="0" max="10" step="0.01"></div>
+      <div class="field"><label>Top Binance USDT symbols</label><input id="setTopN" type="number" min="1" max="1000"></div>
+      <div class="field"><label>1H history bars</label><input id="setHistory" type="number" min="240" max="1000"></div>
+      <div class="field"><label>Concurrent workers</label><input id="setWorkers" type="number" min="1" max="50"></div>
+      <div class="field"><label>App volume surge (strictly &gt;)</label><input id="setAppSurge" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field"><label>Indicator volume lookback</label><input id="setLookback" type="number" min="1" max="500"></div>
+      <div class="field"><label>Indicator volume surge (≥)</label><input id="setIndicatorSurge" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field"><label>Minimum close position</label><input id="setClosePosition" type="number" min="0" max="1" step="0.05"></div>
+      <div class="field"><label>LuxAlgo swing length</label><input id="setSwing" type="number" min="10" max="200"></div>
+      <div class="field"><label>Minimum R:R (inclusive)</label><input id="setMinRr" type="number" min="0" max="20" step="0.1"></div>
+      <div class="field"><label>Maximum R:R (inclusive)</label><input id="setMaxRr" type="number" min="0" max="20" step="0.1"></div>
+      <div class="field check"><input id="setTelegramEnabled" type="checkbox"><label for="setTelegramEnabled">Telegram alerts enabled</label></div>
+      <div class="field"><label>Telegram chat ID</label><input id="setTelegramChat" type="text"></div>
+      <div class="field"><label>New Telegram bot token (blank keeps current)</label><input id="setTelegramToken" type="password" autocomplete="new-password"></div>
     </div>
-    <div class="settings-actions">
-      <button id="saveSettingsBtn" class="btn start" type="button">SAVE SETTINGS</button>
-      <span class="settings-note">Scan schedule is fixed to once per hour at <b>:00 UTC</b>. 1D and 1H timeframes remain fixed.</span>
-      <span id="settingsSaved" class="saveok"></span>
-    </div>
+    <div class="settings-actions"><button id="saveSettingsBtn" class="btn secondary" type="button">SAVE SETTINGS</button><span id="settingsSaved" class="settings-note"></span></div>
   </section>
 
   <div class="footer"><span>Mode is hard-wired to Binance Spot Testnet only.</span><span id="updated">Not updated yet</span></div>
@@ -111,6 +86,7 @@
 (() => {
   const csrf = __CSRF_TOKEN_JSON__;
   let state = null;
+  let settingsInitialized = false;
   const $ = id => document.getElementById(id);
   const money = v => v == null ? '—' : `${Number(v)>=0?'+':''}${Number(v).toFixed(2)} USDT`;
   const num = (v,d=4) => v == null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
@@ -129,12 +105,12 @@
       <div class="trade-top"><div><div class="symbol">${esc(t.symbol)}</div><div class="mono" style="font-size:10px;color:#64748b;margin-top:3px">${esc(t.signal_key)}</div></div><span class="status open">OPEN</span></div>
       <div class="kv">
         <div><span>Entry</span><b>${num(t.entry_price,8)}</b></div><div><span>Current</span><b>${num(t.current_price,8)}</b></div>
-        <div><span>TP</span><b>${num(t.tp,8)}</b></div><div><span>SL</span><b>${num(t.sl,8)}</b></div>
+        <div><span>TP (Pivot R2)</span><b>${num(t.tp,8)}</b></div><div><span>SL</span><b>${num(t.sl,8)}</b></div>
         <div><span>R:R</span><b>${num(t.rr,2)}</b></div><div><span>Risk</span><b>${money(t.risk_usdt)}</b></div>
         <div><span>Quantity</span><b>${num(t.quantity,8)}</b></div><div><span>Opened</span><b>${date(t.opened_at)}</b></div>
       </div>
       <div class="pnl ${cls(t.unrealized_pnl_usdt)}">${money(t.unrealized_pnl_usdt)} <span style="font-size:12px">(${pct(t.unrealized_pct)})</span></div>
-      <div class="ruleline"><span class="tag pass">APP PASS</span><span class="tag pass">INDICATOR PASS</span><span class="tag pass">R:R PASS</span><span class="tag">App Vol ${num(t.app_volume_surge,2)}x</span><span class="tag">Ind Vol ${num(t.indicator_volume_surge,2)}x</span></div>
+      <div class="ruleline"><span class="tag pass">APP PASS</span><span class="tag pass">PIVOT-R2 PASS</span><span class="tag pass">2≤R:R≤4</span><span class="tag">Strong filter ${num(t.strong_high_filter,8)}</span><span class="tag">App Vol ${num(t.app_volume_surge,2)}x</span><span class="tag">Ind Vol ${num(t.indicator_volume_surge,2)}x</span></div>
     </article>`).join('');
   }
 
@@ -152,24 +128,22 @@
   }
   function renderRejected(rows){
     $('rejectedPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Reason',r=>`<span class="bad">${esc(r.reason||'Rejected')}</span>`]
-    ],rows);
-  }
-  function renderSignals(rows){
-    $('signalsPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Status',r=>esc(r.status)],['Time',r=>date(r.close_time_utc)],['Entry',r=>num(r.entry,8)],['TP',r=>num(r.tp,8)],['SL',r=>num(r.sl,8)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Confidence',r=>`${esc(r.confidence_level||'—')} ${r.confidence_score??''}`]
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Stage',r=>esc(r.stage||'Execution')],['Price',r=>num(r.price,8)],['App passed',r=>r.phase_one_passed?'Yes':'No'],['Reason',r=>`<span class="bad">${esc(r.reason||'Rejected')}</span>`]
     ],rows);
   }
 
-  function renderFiltered(rows){
-    $('filteredPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],
-      ['Price',r=>num(r.price,8)],
-      ['Filter',r=>`<span class="${r.category==='Volume'?'warnc':r.category==='Error'?'bad':''}"><b>${esc(r.category||'Filter')}</b></span>`],
-      ['Reason',r=>esc(r.reason||'Filtered')],
-      ['Vol Surge',r=>r.app_volume_surge==null?'—':`${num(r.app_volume_surge,2)}x`],
-      ['Box High',r=>num(r.box_high,8)],
-      ['Box Low',r=>num(r.box_low,8)]
+  function renderSettings(s){
+    if(settingsInitialized)return;settingsInitialized=true;
+    $('setTopN').value=s.top_n;$('setHistory').value=s.hourly_history_bars;$('setWorkers').value=s.scan_workers;
+    $('setAppSurge').value=s.app_minimum_surge;$('setLookback').value=s.indicator_volume_lookback;
+    $('setIndicatorSurge').value=s.indicator_minimum_surge;$('setClosePosition').value=s.minimum_close_position;
+    $('setSwing').value=s.swing_length;$('setMinRr').value=s.minimum_reward_risk;$('setMaxRr').value=s.maximum_reward_risk;
+    $('setTelegramEnabled').checked=!!s.telegram_enabled;$('setTelegramChat').value=s.telegram_chat_id||'';
+    $('setTelegramToken').placeholder=s.telegram_token_configured?'Configured — leave blank to keep':'Not configured';
+  }
+  function renderSignals(rows){
+    $('signalsPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Status',r=>esc(r.status)],['Time',r=>date(r.close_time_utc)],['Entry',r=>num(r.entry,8)],['TP (R2)',r=>num(r.tp,8)],['Classic Pivot',r=>num(r.classic_pivot,8)],['Strong filter',r=>num(r.strong_high_filter,8)],['SL',r=>num(r.sl,8)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Confidence',r=>`${esc(r.confidence_level||'—')} ${r.confidence_score??''}`]
     ],rows);
   }
 
@@ -179,46 +153,30 @@
       ['Execution',m.execution_ready?'<span class="good"><b>READY</b></span>':`<span class="bad"><b>NOT READY</b></span> ${esc(m.execution_error||'')}`],
       ['New entries',m.new_entries_enabled?'<span class="good"><b>ENABLED</b></span>':'<span class="warnc"><b>PAUSED</b></span>'],
       ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
-      ['Strategy','App + Indicator + 2 < R:R < 4'],['Risk',`Max ${num(r.max_risk_per_trade_usdt,2)} USDT/trade · ${r.max_open_positions} max open`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
+      ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.app_confirmed_count} App confirmed · ${d.scan.valid_count} valid · ${num(d.scan.duration_seconds,2)}s`],
+      ['Strategy',`App + Pivot-R2 Pine + ${num(d.settings.minimum_reward_risk,2)} ≤ R:R ≤ ${num(d.settings.maximum_reward_risk,2)}`],
+      ['Risk',`${num(r.risk_per_trade_usdt,2)} USDT/trade · max ${r.max_open_positions} position · max ${r.max_trades_per_utc_day} trade/day`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
     ];
     $('engineBody').innerHTML=items.map(x=>`<tr><th style="width:180px">${x[0]}</th><td>${x[1]}</td></tr>`).join('');
     $('scanMeta').textContent=m.scan_in_progress?'Scanning market now…':`Last scan: ${date(m.last_scan_completed)}`;
     $('syncMeta').textContent=`Last sync: ${date(m.last_position_sync)}`;
   }
 
-  function populateSettings(x){
-    if(!x) return;
-    const map={
-      setMaxSymbols:'max_symbols',setWorkers:'scan_workers',setAge:'max_confirmed_age_minutes',
-      setAppSurge:'app_minimum_surge',setVolLookback:'indicator_volume_lookback',setIndSurge:'indicator_minimum_surge',
-      setClosePos:'minimum_close_position',setMinRR:'minimum_reward_risk',setMaxRR:'maximum_reward_risk',
-      setSwing:'swing_length',setBankroll:'demo_equity_cap_usdt',setRisk:'max_risk_per_trade_usdt',
-      setOpen:'max_open_positions',setDailyLoss:'daily_loss_limit_r',setDrift:'max_entry_drift_pct'
-    };
-    for(const [id,key] of Object.entries(map)){ if(document.activeElement!==$(id)) $(id).value=x[key] ?? ''; }
-  }
-
   function render(d){
-    state=d; const m=d.meta,s=d.stats,r=d.risk,c=d.scan_counts||{};
-    $('scanCount').textContent=c.scanned??'—';
-    $('filteredCount').textContent=c.filtered??'—';
-    $('appConfirmedCount').textContent=c.app_confirmed??'—';
-    $('indicatorPassedCount').textContent=c.indicator_passed??'—';
-    $('indicatorRejectedCount').textContent=c.indicator_rejected??'—';
-
+    state=d; const m=d.meta,s=d.stats,r=d.risk;
     const enabled=m.new_entries_enabled && m.execution_ready;
     $('botPill').className='pill '+(enabled?'good':m.execution_ready?'warn':'bad');
     $('botText').textContent=enabled?'RUNNING / NEW TRADES ON':m.execution_ready?'RUNNING / NEW TRADES PAUSED':'TESTNET NOT READY';
     $('startBtn').disabled=!m.execution_ready || m.new_entries_enabled;
     $('stopBtn').disabled=!m.new_entries_enabled;
     $('equity').textContent=s.estimated_demo_equity_usdt==null?'—':`${num(s.estimated_demo_equity_usdt,2)} USDT`;
-    $('freeUsdt').textContent=`Testnet wallet: ${m.testnet_free_usdt==null?'—':num(m.testnet_free_usdt,2)} · trading bankroll capped at ${num(r.demo_equity_cap_usdt,0)}`;
+    $('freeUsdt').textContent=`Free Testnet USDT: ${m.testnet_free_usdt==null?'—':num(m.testnet_free_usdt,2)} · risk cap ${num(r.demo_equity_cap_usdt,0)}`;
     setMoney('openPnl',s.unrealized_pnl_usdt); $('openCount').textContent=`${s.open_count} / ${r.max_open_positions} positions`;
     setMoney('realizedPnl',s.realized_pnl_usdt); $('realizedR').textContent=`${num(s.realized_r,2)}R total`;
     setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
-    $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`max ${num(r.max_risk_per_trade_usdt,2)} USDT/trade`;
-    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderFiltered(d.filtered_latest||[]); renderEngine(d); populateSettings(d.settings);
+    $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`${num(r.risk_per_trade_usdt,2)} USDT/trade · ${num(r.max_total_open_risk_usdt,2)} USDT max`;
+    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.filter_rejections); renderSignals(d.recent_signals); renderEngine(d); renderSettings(d.settings);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');
   }
@@ -232,29 +190,16 @@
     try{const res=await fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrf}});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);await refresh()}catch(e){showError(e.message)}finally{if(state){$('startBtn').disabled=!state.meta.execution_ready||state.meta.new_entries_enabled;$('stopBtn').disabled=!state.meta.new_entries_enabled}}
   }
   async function saveSettings(){
-    const payload={
-      max_symbols:$('setMaxSymbols').value,scan_workers:$('setWorkers').value,max_confirmed_age_minutes:$('setAge').value,
-      app_minimum_surge:$('setAppSurge').value,indicator_volume_lookback:$('setVolLookback').value,indicator_minimum_surge:$('setIndSurge').value,
-      minimum_close_position:$('setClosePos').value,
-      swing_length:$('setSwing').value,demo_equity_cap_usdt:$('setBankroll').value,max_risk_per_trade_usdt:$('setRisk').value,
-      max_open_positions:$('setOpen').value,daily_loss_limit_r:$('setDailyLoss').value,max_entry_drift_pct:$('setDrift').value
-    };
-    $('saveSettingsBtn').disabled=true;$('settingsSaved').textContent='';
-    try{
-      const res=await fetch('/api/settings',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      const out=await res.json(); if(!res.ok||!out.ok) throw new Error(out.error||`HTTP ${res.status}`);
-      $('settingsSaved').textContent='Saved';
-      await refresh();
-    }catch(e){showError(e.message)}finally{$('saveSettingsBtn').disabled=false}
+    const body={top_n:Number($('setTopN').value),hourly_history_bars:Number($('setHistory').value),scan_workers:Number($('setWorkers').value),app_minimum_surge:Number($('setAppSurge').value),indicator_volume_lookback:Number($('setLookback').value),indicator_minimum_surge:Number($('setIndicatorSurge').value),minimum_close_position:Number($('setClosePosition').value),swing_length:Number($('setSwing').value),minimum_reward_risk:Number($('setMinRr').value),maximum_reward_risk:Number($('setMaxRr').value),telegram_enabled:$('setTelegramEnabled').checked,telegram_chat_id:$('setTelegramChat').value,telegram_bot_token:$('setTelegramToken').value};
+    $('saveSettingsBtn').disabled=true;$('settingsSaved').textContent='Saving…';
+    try{const res=await fetch('/api/config',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(body)});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);$('setTelegramToken').value='';$('settingsSaved').textContent='Saved. Applies on the next scan.';settingsInitialized=false;await refresh()}catch(e){showError(e.message);$('settingsSaved').textContent='Not saved.'}finally{$('saveSettingsBtn').disabled=false}
   }
-
-  $('settingsBtn').addEventListener('click',()=>{$('settingsSection').classList.toggle('hidden'); if(!$('settingsSection').classList.contains('hidden')) $('settingsSection').scrollIntoView({behavior:'smooth'});});
-  $('saveSettingsBtn').addEventListener('click',saveSettings);
   $('startBtn').addEventListener('click',()=>action('/api/start'));
   $('stopBtn').addEventListener('click',()=>action('/api/stop'));
+  $('saveSettingsBtn').addEventListener('click',saveSettings);
   document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');
-    ['closed','rejected','signals','filtered'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
+    ['closed','rejected','signals'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
   }));
   refresh(); setInterval(refresh,5000);
 })();
