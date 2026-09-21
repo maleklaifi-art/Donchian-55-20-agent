@@ -10,10 +10,11 @@ from demo_trader import (
     floor_tick,
     ceil_tick,
     deterministic_id,
+    scan_market_detailed,
 )
 from runtime_settings import SettingsStore
 import strategy
-from strategy import Candle, Evaluation, PhaseOneSignal, StrategyConfig, evaluate_latest, previous_completed_daily, reward_risk_is_accepted
+from strategy import Candle, Evaluation, PhaseOneSignal, Signal, StrategyConfig, evaluate_latest, previous_completed_daily, reward_risk_is_accepted
 
 
 def test_rounding():
@@ -45,6 +46,43 @@ def test_display_diagnostics_preserve_app_and_indicator_values():
     assert row["phase_one_passed"] is True
     assert row["app_volume_surge"] == 2.1
     assert row["indicator_volume_surge"] == 1.2
+
+
+def test_display_categories_are_filtered_confirmed_and_passed(tmp_path):
+    class FakeMarket:
+        def symbols(self, quote_asset, maximum):
+            return ["FILTEREDUSDT", "CONFIRMEDUSDT", "PASSEDUSDT"]
+
+        def klines(self, symbol, interval, limit):
+            return []
+
+    confirmed = PhaseOneSignal("CONFIRMEDUSDT", 1, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.1)
+    passed_phase = PhaseOneSignal("PASSEDUSDT", 2, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.2)
+    passed_signal = Signal(
+        "PASSEDUSDT", 2, "2026-09-21T00:59:59.999Z", 10, 12, 9, 11,
+        13, 2, 9.5, 9, 2.2, 1.8, 0.8, 75, "MEDIUM",
+    )
+    results = {
+        "FILTEREDUSDT": Evaluation("FILTEREDUSDT", 1.0, rejection_stage="NR7", rejection_reason="No completed NR7 box"),
+        "CONFIRMEDUSDT": Evaluation("CONFIRMEDUSDT", 10, confirmed, rejection_stage="Strong High", rejection_reason="Not active"),
+        "PASSEDUSDT": Evaluation("PASSEDUSDT", 10, passed_phase, passed_signal),
+    }
+
+    def evaluate(symbol, candles, config, now_ms):
+        return results[symbol]
+
+    cfg = BotConfig(scan_workers=1, signal_log=str(tmp_path / "signals.json"), event_log=str(tmp_path / "events.jsonl"))
+    with patch("demo_trader.evaluate_latest_detailed", side_effect=evaluate):
+        snapshot = scan_market_detailed(FakeMarket(), cfg, StrategyConfig(), EventLogger(cfg.event_log))
+
+    assert snapshot["coins_scanned"] == 3
+    assert snapshot["valid_count"] == 1
+    assert snapshot["app_confirmed_count"] == 2
+    assert snapshot["indicator_rejected_count"] == 1
+    assert [row["symbol"] for row in snapshot["filtered"]] == ["FILTEREDUSDT"]
+    assert snapshot["filtered"][0]["stage"] == "NR7"
+    assert {row["symbol"] for row in snapshot["phase_one"]} == {"CONFIRMEDUSDT", "PASSEDUSDT"}
+    assert snapshot["phase_one"][0]["status"] in {"PASSED", "INDICATOR_NOT_PASSED"}
 
 
 def test_fast_default_and_exact_hour_schedule_label():

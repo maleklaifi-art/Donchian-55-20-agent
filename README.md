@@ -63,8 +63,9 @@ The dashboard shows:
 - App-volume surge and indicator-volume surge for every trade.
 - Closed trades with TP/SL outcome, realized R and estimated USDT P&L.
 - Win rate, wins/losses, total R, today's R and P&L.
-- Rejected signals and the rejection reason.
-- Recent valid signals.
+- Filtered App failures with the exact App stage and reason.
+- App-confirmed candidates with any later indicator failure reason.
+- Full App + indicator Passed signals with Entry, TP, SL and diagnostics.
 - START NEW TRADES and STOP NEW TRADES controls.
 
 **STOP NEW TRADES does not cancel protection on existing positions.** Existing positions continue to be monitored until their Testnet TP/SL resolves.
@@ -112,9 +113,9 @@ After the one-time deployment:
 
 ## Dashboard terms
 
-- **Signals** — closed 1H breakouts that passed the App volume-surge gate.
-- **Filtered** — breakouts that did not pass the App volume-surge gate.
-- **Rejected** — App signals that were rejected by one of the indicator rules.
+- **Filtered** — coins that failed an App rule. The exact App stage and reason are retained, including Data, NR7, Breakout, Volume, or Stablecoin.
+- **Confirmed** — closed 1H breakouts that passed every App rule. Indicator failures remain visible here with their exact reason.
+- **Passed** — Confirmed coins that also passed every indicator rule. Entry, Pivot R2 TP, Box Low SL, R:R and all signal diagnostics are shown.
 - **Closed** — Testnet trades that the cloud agent opened and later closed at TP or SL. This category exists only on the cloud agent.
 
 No PowerShell, terminal, ChatGPT session, or home PC is required for normal operation.

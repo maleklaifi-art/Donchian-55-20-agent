@@ -46,14 +46,14 @@
       <h2>Trade history & signals</h2>
       <div class="tabs">
         <button class="tab" data-tab="closed" type="button">Closed</button>
-        <button class="tab" data-tab="rejected" type="button">Rejected</button>
-        <button class="tab active" data-tab="signals" type="button">Signals</button>
+        <button class="tab active" data-tab="passed" type="button">Passed</button>
+        <button class="tab" data-tab="confirmed" type="button">Confirmed</button>
         <button class="tab" data-tab="filtered" type="button">Filtered</button>
       </div>
     </div>
     <div id="closedPanel" class="table-wrap hidden"></div>
-    <div id="rejectedPanel" class="table-wrap hidden"></div>
-    <div id="signalsPanel" class="table-wrap"></div>
+    <div id="passedPanel" class="table-wrap"></div>
+    <div id="confirmedPanel" class="table-wrap hidden"></div>
     <div id="filteredPanel" class="table-wrap hidden"></div>
   </section>
 
@@ -128,15 +128,9 @@
       ['P&L',r=>`<span class="${cls(r.pnl_usdt)}"><b>${money(r.pnl_usdt)}</b></span>`],['R',r=>`<span class="${cls(r.realized_r)}">${num(r.realized_r,2)}R</span>`],['Closed',r=>date(r.closed_at)]
     ],rows);
   }
-  function renderRejected(rows){
-    $('rejectedPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Reason',r=>`<span class="bad">${esc(r.reason||'Rejected')}</span>`]
-    ],rows);
-  }
-
   function renderFiltered(rows){
     $('filteredPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Price',r=>num(r.price,8)],['Stage',r=>esc(r.stage||'App Volume')],['App Vol',r=>r.app_volume_surge==null?'—':`${num(r.app_volume_surge,2)}x`],['Reason',r=>`<span class="warnc">${esc(r.reason||'Did not pass App volume')}</span>`]
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Price',r=>num(r.price,8)],['App stage',r=>`<span class="warnc"><b>${esc(r.stage||'App')}</b></span>`],['App Vol',r=>r.app_volume_surge==null?'—':`${num(r.app_volume_surge,2)}x`],['Reason',r=>esc(r.reason||'Did not pass an App rule')]
     ],rows);
   }
 
@@ -149,9 +143,14 @@
     $('setTelegramEnabled').checked=!!s.telegram_enabled;$('setTelegramChat').value=s.telegram_chat_id||'';
     $('setTelegramToken').placeholder=s.telegram_token_configured?'Configured — leave blank to keep':'Not configured';
   }
-  function renderSignals(rows){
-    $('signalsPanel').innerHTML=table([
-      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['Status',r=>r.status==='VALID'?'<span class="good"><b>VALID</b></span>':'<span class="bad"><b>INDICATOR REJECTED</b></span>'],['Entry',r=>num(r.entry,8)],['R:R',r=>num(r.rr,2)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>r.indicator_volume_surge==null?'—':`${num(r.indicator_volume_surge,2)}x`]
+  function renderPassed(rows){
+    $('passedPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['Entry',r=>num(r.entry,8)],['TP (Pivot R2)',r=>`<span class="good"><b>${num(r.tp,8)}</b></span>`],['SL (Box Low)',r=>`<span class="bad"><b>${num(r.sl,8)}</b></span>`],['R:R',r=>`<b>${num(r.rr,2)}</b>`],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Ind Vol',r=>`${num(r.indicator_volume_surge,2)}x`],['Close Pos.',r=>num(r.close_position,2)],['Strong High',r=>num(r.strong_high_filter,8)],['Confidence',r=>`${num(r.confidence_score,0)} · ${esc(r.confidence_level||'—')}`]
+    ],rows);
+  }
+  function renderConfirmed(rows){
+    $('confirmedPanel').innerHTML=table([
+      ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal time',r=>date(r.close_time_utc)],['App',r=>'<span class="warnc"><b>CONFIRMED</b></span>'],['Indicator',r=>r.status==='PASSED'?'<span class="good"><b>PASSED</b></span>':'<span class="bad"><b>NOT PASSED</b></span>'],['Entry',r=>num(r.entry,8)],['Box High',r=>num(r.box_high,8)],['Box Low / SL',r=>num(r.box_low,8)],['App Vol',r=>`${num(r.app_volume_surge,2)}x`],['Indicator stage',r=>esc(r.indicator_stage||'All rules')],['Indicator reason',r=>r.indicator_reason?`<span class="bad">${esc(r.indicator_reason)}</span>`:'—']
     ],rows);
   }
 
@@ -161,7 +160,7 @@
       ['Execution',m.execution_ready?'<span class="good"><b>READY</b></span>':`<span class="bad"><b>NOT READY</b></span> ${esc(m.execution_error||'')}`],
       ['New entries',m.new_entries_enabled?'<span class="good"><b>ENABLED</b></span>':'<span class="warnc"><b>PAUSED</b></span>'],
       ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
-      ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.app_confirmed_count} signals · ${d.scan.indicator_rejected_count} rejected · ${d.scan.filtered.length} filtered · ${num(d.scan.duration_seconds,2)}s`],
+      ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.valid_count} passed · ${d.scan.app_confirmed_count} confirmed · ${d.scan.filtered.length} filtered · ${d.scan.error_count} errors · ${num(d.scan.duration_seconds,2)}s`],
       ['Schedule','Every hour at H:00 UTC'],
       ['Strategy',`App + Pivot-R2 Pine + ${num(d.settings.minimum_reward_risk,2)} ≤ R:R ≤ ${num(d.settings.maximum_reward_risk,2)}`],
       ['Risk',`${num(r.risk_per_trade_usdt,2)} USDT/trade · max ${r.max_open_positions} position · max ${r.max_trades_per_utc_day} trade/day`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
@@ -185,7 +184,7 @@
     setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
     $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`${num(r.risk_per_trade_usdt,2)} USDT/trade · ${num(r.max_total_open_risk_usdt,2)} USDT max`;
-    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.indicator_rejections); renderSignals(d.trade_signals); renderFiltered(d.filter_rejections); renderEngine(d); renderSettings(d.settings);
+    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderPassed(d.passed_signals); renderConfirmed(d.confirmed_signals); renderFiltered(d.filtered_signals); renderEngine(d); renderSettings(d.settings);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');
   }
@@ -208,7 +207,7 @@
   $('saveSettingsBtn').addEventListener('click',saveSettings);
   document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');
-    ['closed','rejected','signals','filtered'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
+    ['closed','passed','confirmed','filtered'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));
   }));
   refresh(); setInterval(refresh,5000);
 })();

@@ -490,7 +490,9 @@ def scan_market_detailed(
                 evaluation: Evaluation = fut.result()
                 if evaluation.phase_one:
                     candidate = evaluation.phase_one.to_dict()
-                    candidate["status"] = "VALID" if evaluation.signal else "INDICATOR_REJECTED"
+                    candidate["status"] = "PASSED" if evaluation.signal else "INDICATOR_NOT_PASSED"
+                    candidate["indicator_stage"] = evaluation.rejection_stage
+                    candidate["indicator_reason"] = evaluation.rejection_reason
                     if evaluation.indicator_volume_surge is not None:
                         candidate["indicator_volume_surge"] = evaluation.indicator_volume_surge
                     if evaluation.close_position is not None:
@@ -509,7 +511,9 @@ def scan_market_detailed(
                             logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
                 elif evaluation.phase_one:
                     rejected.append(evaluation.filtered_dict())
-                elif evaluation.rejection_stage == "App Volume":
+                else:
+                    # The original App display places every pre-confirmation
+                    # failure in Filtered and preserves its exact App reason.
                     filtered.append(evaluation.filtered_dict())
             except Exception as exc:
                 errors += 1
