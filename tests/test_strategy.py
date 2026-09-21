@@ -53,6 +53,18 @@ def test_fast_default_and_exact_hour_schedule_label():
     assert settings.public_dict()["schedule"] == "Hourly at HH:00 UTC"
 
 
+def test_existing_default_worker_setting_migrates_once(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{"scan_workers": 8}', encoding="utf-8")
+    migrated = SettingsStore(str(path)).get()
+    assert migrated.scan_workers == 50
+    assert migrated.settings_revision == 2
+
+    store = SettingsStore(str(path))
+    store.update({"scan_workers": 8})
+    assert SettingsStore(str(path)).get().scan_workers == 8
+
+
 def test_previous_completed_daily_uses_immediately_prior_utc_day():
     hour = 3_600_000
     day = 86_400_000

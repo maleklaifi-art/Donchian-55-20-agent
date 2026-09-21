@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 @dataclass
 class RuntimeSettings:
+    settings_revision: int = 2
     top_n: int = 1000
     hourly_history_bars: int = 1000
     scan_workers: int = 50
@@ -27,6 +28,7 @@ class RuntimeSettings:
 
     def public_dict(self) -> dict:
         data = asdict(self)
+        data.pop("settings_revision", None)
         data["telegram_bot_token"] = ""
         data["telegram_token_configured"] = bool(self.telegram_bot_token)
         data["schedule"] = "Hourly at HH:00 UTC"
@@ -45,7 +47,13 @@ class SettingsStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
+            previous_revision = int(raw.get("settings_revision", 1))
             self._value = self._validated(raw, self._value)
+            if previous_revision < 2 and self._value.scan_workers == 8:
+                self._value.scan_workers = 50
+            self._value.settings_revision = 2
+            if previous_revision < 2:
+                self._write(self._value)
         except Exception as exc:
             raise RuntimeError(f"settings file is unreadable: {self.path}: {exc}") from exc
 
@@ -60,6 +68,7 @@ class SettingsStore:
 
     def _validated(self, raw: Dict[str, Any], old: RuntimeSettings) -> RuntimeSettings:
         value = RuntimeSettings(**asdict(old))
+        value.settings_revision = int(raw.get("settings_revision", value.settings_revision))
         value.top_n = self._number(raw, "top_n", value.top_n, 1, 1000, True)
         value.hourly_history_bars = self._number(raw, "hourly_history_bars", value.hourly_history_bars, 240, 1000, True)
         value.scan_workers = self._number(raw, "scan_workers", value.scan_workers, 1, 50, True)
@@ -90,16 +99,19 @@ class SettingsStore:
     def update(self, raw: Dict[str, Any]) -> RuntimeSettings:
         with self._lock:
             value = self._validated(raw, self._value)
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd, temporary = tempfile.mkstemp(prefix=self.path.name + ".", dir=str(self.path.parent))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(asdict(value), handle, indent=2)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary, self.path)
-            finally:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
+            self._write(value)
             self._value = value
             return RuntimeSettings(**asdict(value))
+
+    def _write(self, value: RuntimeSettings):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=self.path.name + ".", dir=str(self.path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(asdict(value), handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
