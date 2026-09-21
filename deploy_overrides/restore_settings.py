@@ -36,6 +36,38 @@ insert = '''        if path == "/api/stop":\n            engine.set_new_entries_
 if needle not in c:
     raise SystemExit('settings route marker missing')
 c = c.replace(needle, insert, 1)
+
+# Make saved settings visibly and operationally effective on the next scan.
+needle = '''        self.started_at = utc_now()\n        self._configure_execution()\n'''
+insert = '''        self.started_at = utc_now()\n        self.settings_updated_at = None\n        self.settings_revision = 0\n        self.last_scan_settings = None\n        self._configure_execution()\n'''
+if needle not in c:
+    raise SystemExit('settings metadata marker missing')
+c = c.replace(needle, insert, 1)
+
+needle = '''            self._run_scan()\n            now = time.time()\n            next_hour = (int(now // 3600) + 1) * 3600 + 10\n            self.scan_wakeup.clear()\n            self.scan_wakeup.wait(timeout=max(15.0, next_hour - now))\n'''
+insert = '''            self._run_scan()\n            now = time.time()\n            next_hour = (int(now // 3600) + 1) * 3600 + 10\n            # Do not clear before waiting: a settings save during a scan must not be lost.\n            self.scan_wakeup.wait(timeout=max(15.0, next_hour - now))\n            self.scan_wakeup.clear()\n'''
+if needle not in c:
+    raise SystemExit('scanner wake marker missing')
+c = c.replace(needle, insert, 1)
+
+needle = '''            self.scan_in_progress = True\n            self.last_scan_started = utc_now()\n            self.last_scan_error = None\n'''
+insert = '''            self.scan_in_progress = True\n            self.last_scan_started = utc_now()\n            self.last_scan_error = None\n            self.last_scan_settings = self.editable_settings()\n'''
+if needle not in c:
+    raise SystemExit('scan settings marker missing')
+c = c.replace(needle, insert, 1)
+
+needle = '''        self.logger.emit("SETTINGS_UPDATED", settings=settings)\n        return settings\n'''
+insert = '''        with self.meta_lock:\n            self.settings_updated_at = utc_now()\n            self.settings_revision += 1\n            revision = self.settings_revision\n        self.logger.emit("SETTINGS_UPDATED", settings=settings, revision=revision)\n        # Wake the scanner so strategy/filter changes are applied immediately, not an hour later.\n        self.scan_wakeup.set()\n        self.logger.emit("SETTINGS_RESCAN_REQUESTED", revision=revision)\n        return settings\n'''
+if needle not in c:
+    raise SystemExit('settings apply marker missing')
+c = c.replace(needle, insert, 1)
+
+needle = '''                "testnet_free_usdt": self.testnet_free_usdt,\n'''
+insert = '''                "testnet_free_usdt": self.testnet_free_usdt,\n                "settings_updated_at": self.settings_updated_at,\n                "settings_revision": self.settings_revision,\n                "last_scan_settings": self.last_scan_settings,\n'''
+if needle not in c:
+    raise SystemExit('snapshot settings meta marker missing')
+c = c.replace(needle, insert, 1)
+
 cloud.write_text(c, encoding='utf-8')
 
 h = dash.read_text(encoding='utf-8')
@@ -54,25 +86,36 @@ if needle not in h:
 h = h.replace(needle, insert, 1)
 
 needle = '  <div class="footer"><span>Mode is hard-wired to Binance Spot Testnet only.</span><span id="updated">Not updated yet</span></div>'
-section = '''  <section id="settingsSection" class="section hidden">\n    <div class="section-head">\n      <h2>Agent settings</h2>\n      <div class="meta">Runtime settings · saved to /data/dashboard_settings.json</div>\n    </div>\n    <div class="settings-grid">\n      <div class="field"><label>Top N symbols</label><input id="setMaxSymbols" type="number" min="1" max="1000" step="1"></div>\n      <div class="field"><label>Max concurrent requests</label><input id="setWorkers" type="number" min="1" max="50" step="1"></div>\n      <div class="field"><label>App min volume surge</label><input id="setAppSurge" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Indicator volume lookback</label><input id="setVolLookback" type="number" min="1" max="500" step="1"></div>\n      <div class="field"><label>Indicator min volume surge</label><input id="setIndSurge" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Minimum close position</label><input id="setClosePos" type="number" min="0" max="1" step="0.01"></div>\n      <div class="field"><label>Agent minimum R:R (fixed, inclusive)</label><input id="setMinRR" type="number" value="2" disabled></div>\n      <div class="field"><label>Agent maximum R:R (fixed, inclusive)</label><input id="setMaxRR" type="number" value="4" disabled></div>\n      <div class="field"><label>Swing length</label><input id="setSwing" type="number" min="10" max="500" step="1"></div>\n      <div class="field"><label>Demo bankroll cap (USDT)</label><input id="setBankroll" type="number" min="10" max="1000000" step="1"></div>\n      <div class="field"><label>Risk per trade (%)</label><input id="setRiskPct" type="number" min="0.01" max="10" step="0.01"></div>\n      <div class="field"><label>Max open positions</label><input id="setOpen" type="number" min="1" max="20" step="1"></div>\n      <div class="field"><label>Max total open risk (%)</label><input id="setTotalRisk" type="number" min="0.01" max="100" step="0.01"></div>\n      <div class="field"><label>Daily loss limit (R)</label><input id="setDailyLoss" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Max position notional (%)</label><input id="setNotional" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Max entry drift (%)</label><input id="setDrift" type="number" min="0" max="10" step="0.01"></div>\n    </div>\n    <div class="settings-actions">\n      <button id="saveSettingsBtn" class="btn start" type="button">SAVE SETTINGS</button>\n      <span class="settings-note">R:R is locked to <b>2.00 ≤ R:R ≤ 4.00</b>. 1H/1D strategy timeframes remain fixed.</span>\n      <span id="settingsSaved" class="saveok"></span>\n    </div>\n  </section>\n\n  <div class="footer"><span>Mode is hard-wired to Binance Spot Testnet only.</span><span id="updated">Not updated yet</span></div>'''
+section = '''  <section id="settingsSection" class="section hidden">\n    <div class="section-head">\n      <h2>Agent settings</h2>\n      <div id="settingsMeta" class="meta">Runtime settings · saved to /data/dashboard_settings.json</div>\n    </div>\n    <div class="settings-grid">\n      <div class="field"><label>Top N symbols</label><input id="setMaxSymbols" type="number" min="1" max="1000" step="1"></div>\n      <div class="field"><label>Max concurrent requests</label><input id="setWorkers" type="number" min="1" max="50" step="1"></div>\n      <div class="field"><label>App min volume surge</label><input id="setAppSurge" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Indicator volume lookback</label><input id="setVolLookback" type="number" min="1" max="500" step="1"></div>\n      <div class="field"><label>Indicator min volume surge</label><input id="setIndSurge" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Minimum close position</label><input id="setClosePos" type="number" min="0" max="1" step="0.01"></div>\n      <div class="field"><label>Agent minimum R:R (fixed, inclusive)</label><input id="setMinRR" type="number" value="2" disabled></div>\n      <div class="field"><label>Agent maximum R:R (fixed, inclusive)</label><input id="setMaxRR" type="number" value="4" disabled></div>\n      <div class="field"><label>Swing length</label><input id="setSwing" type="number" min="10" max="500" step="1"></div>\n      <div class="field"><label>Demo bankroll cap (USDT)</label><input id="setBankroll" type="number" min="10" max="1000000" step="1"></div>\n      <div class="field"><label>Risk per trade (%)</label><input id="setRiskPct" type="number" min="0.01" max="10" step="0.01"></div>\n      <div class="field"><label>Max open positions</label><input id="setOpen" type="number" min="1" max="20" step="1"></div>\n      <div class="field"><label>Max total open risk (%)</label><input id="setTotalRisk" type="number" min="0.01" max="100" step="0.01"></div>\n      <div class="field"><label>Daily loss limit (R)</label><input id="setDailyLoss" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Max position notional (%)</label><input id="setNotional" type="number" min="0.1" max="100" step="0.1"></div>\n      <div class="field"><label>Max entry drift (%)</label><input id="setDrift" type="number" min="0" max="10" step="0.01"></div>\n    </div>\n    <div class="settings-actions">\n      <button id="saveSettingsBtn" class="btn start" type="button">SAVE SETTINGS</button>\n      <span class="settings-note">R:R is locked to <b>2.00 ≤ R:R ≤ 4.00</b>. 1H/1D strategy timeframes remain fixed.</span>\n      <span id="settingsSaved" class="saveok"></span>\n    </div>\n    <div id="settingsApplied" class="settings-actions settings-note">Waiting for active settings…</div>\n  </section>\n\n  <div class="footer"><span>Mode is hard-wired to Binance Spot Testnet only.</span><span id="updated">Not updated yet</span></div>'''
 if needle not in h:
     raise SystemExit('settings section marker missing')
 h = h.replace(needle, section, 1)
 
-needle = '  function render(d){\n'
+needle = '  function renderSettingsState(d){
+    const x=d.settings||{}, m=d.meta||{}, ls=m.last_scan_settings||{};
+    $('settingsMeta').textContent='Active revision '+(m.settings_revision??0)+(m.settings_updated_at?' · changed '+date(m.settings_updated_at):'');
+    $('settingsApplied').innerHTML='ACTIVE NOW: Top <b>'+esc(x.max_symbols??'—')+'</b> · Workers <b>'+esc(x.scan_workers??'—')+
+      '</b> · App vol ≥ <b>'+esc(x.app_minimum_surge??'—')+'x</b> · Indicator vol ≥ <b>'+esc(x.indicator_minimum_surge??'—')+
+      'x</b> · Close ≥ <b>'+esc(x.minimum_close_position??'—')+'</b> · Swing <b>'+esc(x.swing_length??'—')+
+      '</b><br>LAST SCAN USED: Top <b>'+esc(ls.max_symbols??'—')+'</b> · App vol ≥ <b>'+esc(ls.app_minimum_surge??'—')+
+      'x</b> · Indicator vol ≥ <b>'+esc(ls.indicator_minimum_surge??'—')+'x</b> · Close ≥ <b>'+esc(ls.minimum_close_position??'—')+'</b>';
+  }
+
+  function render(d){
+'
 insert = '''  function populateSettings(x){\n    if(!x) return;\n    const map={\n      setMaxSymbols:'max_symbols',setWorkers:'scan_workers',setAppSurge:'app_minimum_surge',\n      setVolLookback:'indicator_volume_lookback',setIndSurge:'indicator_minimum_surge',setClosePos:'minimum_close_position',\n      setMinRR:'minimum_reward_risk',setMaxRR:'maximum_reward_risk',setSwing:'swing_length',\n      setBankroll:'demo_equity_cap_usdt',setRiskPct:'risk_per_trade_pct',setOpen:'max_open_positions',\n      setTotalRisk:'max_total_open_risk_pct',setDailyLoss:'daily_loss_limit_r',setNotional:'max_position_notional_pct',setDrift:'max_entry_drift_pct'\n    };\n    for(const [id,key] of Object.entries(map)){ if(document.activeElement!==$(id)) $(id).value=x[key] ?? ''; }\n  }\n\n  function render(d){\n'''
 if needle not in h:
     raise SystemExit('populate settings marker missing')
 h = h.replace(needle, insert, 1)
 
 needle = '    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderEngine(d);\n'
-insert = '    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderEngine(d); populateSettings(d.settings);\n'
+insert = '    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderEngine(d); populateSettings(d.settings); renderSettingsState(d);\n'
 if needle not in h:
     raise SystemExit('render settings marker missing')
 h = h.replace(needle, insert, 1)
 
 needle = '''  $('startBtn').addEventListener('click',()=>action('/api/start'));\n  $('stopBtn').addEventListener('click',()=>action('/api/stop'));\n'''
-insert = '''  async function saveSettings(){\n    const payload={\n      max_symbols:$('setMaxSymbols').value,scan_workers:$('setWorkers').value,app_minimum_surge:$('setAppSurge').value,\n      indicator_volume_lookback:$('setVolLookback').value,indicator_minimum_surge:$('setIndSurge').value,minimum_close_position:$('setClosePos').value,\n      swing_length:$('setSwing').value,demo_equity_cap_usdt:$('setBankroll').value,risk_per_trade_pct:$('setRiskPct').value,\n      max_open_positions:$('setOpen').value,max_total_open_risk_pct:$('setTotalRisk').value,daily_loss_limit_r:$('setDailyLoss').value,\n      max_position_notional_pct:$('setNotional').value,max_entry_drift_pct:$('setDrift').value\n    };\n    $('saveSettingsBtn').disabled=true;$('settingsSaved').textContent='';\n    try{\n      const res=await fetch('/api/settings',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(payload)});\n      const out=await res.json(); if(!res.ok||!out.ok) throw new Error(out.error||'HTTP '+res.status);\n      $('settingsSaved').textContent='Saved';\n      await refresh();\n    }catch(e){showError(e.message)}finally{$('saveSettingsBtn').disabled=false}\n  }\n  $('settingsBtn').addEventListener('click',()=>{$('settingsSection').classList.toggle('hidden'); if(!$('settingsSection').classList.contains('hidden')) $('settingsSection').scrollIntoView({behavior:'smooth'});});\n  $('saveSettingsBtn').addEventListener('click',saveSettings);\n  $('startBtn').addEventListener('click',()=>action('/api/start'));\n  $('stopBtn').addEventListener('click',()=>action('/api/stop'));\n'''
+insert = '''  async function saveSettings(){\n    const payload={\n      max_symbols:$('setMaxSymbols').value,scan_workers:$('setWorkers').value,app_minimum_surge:$('setAppSurge').value,\n      indicator_volume_lookback:$('setVolLookback').value,indicator_minimum_surge:$('setIndSurge').value,minimum_close_position:$('setClosePos').value,\n      swing_length:$('setSwing').value,demo_equity_cap_usdt:$('setBankroll').value,risk_per_trade_pct:$('setRiskPct').value,\n      max_open_positions:$('setOpen').value,max_total_open_risk_pct:$('setTotalRisk').value,daily_loss_limit_r:$('setDailyLoss').value,\n      max_position_notional_pct:$('setNotional').value,max_entry_drift_pct:$('setDrift').value\n    };\n    $('saveSettingsBtn').disabled=true;$('settingsSaved').textContent='';\n    try{\n      const res=await fetch('/api/settings',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(payload)});\n      const out=await res.json(); if(!res.ok||!out.ok) throw new Error(out.error||'HTTP '+res.status);\n      $('settingsSaved').textContent='Saved — fresh scan requested';\n      await refresh();\n    }catch(e){showError(e.message)}finally{$('saveSettingsBtn').disabled=false}\n  }\n  $('settingsBtn').addEventListener('click',()=>{$('settingsSection').classList.toggle('hidden'); if(!$('settingsSection').classList.contains('hidden')) $('settingsSection').scrollIntoView({behavior:'smooth'});});\n  $('saveSettingsBtn').addEventListener('click',saveSettings);\n  $('startBtn').addEventListener('click',()=>action('/api/start'));\n  $('stopBtn').addEventListener('click',()=>action('/api/stop'));\n'''
 if needle not in h:
     raise SystemExit('settings listener marker missing')
 h = h.replace(needle, insert, 1)
