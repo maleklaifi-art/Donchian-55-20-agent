@@ -91,7 +91,28 @@ if needle not in h:
     raise SystemExit('settings section marker missing')
 h = h.replace(needle, section, 1)
 
-needle = '  function renderSettingsState(d){
+needle = '''  function populateSettings(x){
+    if(!x) return;
+    const map={
+      setMaxSymbols:'max_symbols',setWorkers:'scan_workers',setAppSurge:'app_minimum_surge',
+      setVolLookback:'indicator_volume_lookback',setIndSurge:'indicator_minimum_surge',setClosePos:'minimum_close_position',
+      setMinRR:'minimum_reward_risk',setMaxRR:'maximum_reward_risk',setSwing:'swing_length',
+      setBankroll:'demo_equity_cap_usdt',setRiskPct:'risk_per_trade_pct',setOpen:'max_open_positions',
+      setTotalRisk:'max_total_open_risk_pct',setDailyLoss:'daily_loss_limit_r',setNotional:'max_position_notional_pct',setDrift:'max_entry_drift_pct'
+    };
+    for(const [id,key] of Object.entries(map)){ if(document.activeElement!==$(id)) $(id).value=x[key] ?? ''; }
+  }
+
+  function render(d){
+'''
+insert = '''  function populateSettings(x){\n    if(!x) return;\n    const map={\n      setMaxSymbols:'max_symbols',setWorkers:'scan_workers',setAppSurge:'app_minimum_surge',\n      setVolLookback:'indicator_volume_lookback',setIndSurge:'indicator_minimum_surge',setClosePos:'minimum_close_position',\n      setMinRR:'minimum_reward_risk',setMaxRR:'maximum_reward_risk',setSwing:'swing_length',\n      setBankroll:'demo_equity_cap_usdt',setRiskPct:'risk_per_trade_pct',setOpen:'max_open_positions',\n      setTotalRisk:'max_total_open_risk_pct',setDailyLoss:'daily_loss_limit_r',setNotional:'max_position_notional_pct',setDrift:'max_entry_drift_pct'\n    };\n    for(const [id,key] of Object.entries(map)){ if(document.activeElement!==$(id)) $(id).value=x[key] ?? ''; }\n  }\n\n  function render(d){\n'''
+if needle not in h:
+    raise SystemExit('populate settings marker missing')
+h = h.replace(needle, insert, 1)
+
+needle = '''  function render(d){
+'''
+insert = '''  function renderSettingsState(d){
     const x=d.settings||{}, m=d.meta||{}, ls=m.last_scan_settings||{};
     $('settingsMeta').textContent='Active revision '+(m.settings_revision??0)+(m.settings_updated_at?' · changed '+date(m.settings_updated_at):'');
     $('settingsApplied').innerHTML='ACTIVE NOW: Top <b>'+esc(x.max_symbols??'—')+'</b> · Workers <b>'+esc(x.scan_workers??'—')+
@@ -102,10 +123,9 @@ needle = '  function renderSettingsState(d){
   }
 
   function render(d){
-'
-insert = '''  function populateSettings(x){\n    if(!x) return;\n    const map={\n      setMaxSymbols:'max_symbols',setWorkers:'scan_workers',setAppSurge:'app_minimum_surge',\n      setVolLookback:'indicator_volume_lookback',setIndSurge:'indicator_minimum_surge',setClosePos:'minimum_close_position',\n      setMinRR:'minimum_reward_risk',setMaxRR:'maximum_reward_risk',setSwing:'swing_length',\n      setBankroll:'demo_equity_cap_usdt',setRiskPct:'risk_per_trade_pct',setOpen:'max_open_positions',\n      setTotalRisk:'max_total_open_risk_pct',setDailyLoss:'daily_loss_limit_r',setNotional:'max_position_notional_pct',setDrift:'max_entry_drift_pct'\n    };\n    for(const [id,key] of Object.entries(map)){ if(document.activeElement!==$(id)) $(id).value=x[key] ?? ''; }\n  }\n\n  function render(d){\n'''
+'''
 if needle not in h:
-    raise SystemExit('populate settings marker missing')
+    raise SystemExit('settings state marker missing')
 h = h.replace(needle, insert, 1)
 
 needle = '    renderOpen(d.open_trades); renderClosed(d.closed_trades); renderRejected(d.rejected_signals); renderSignals(d.recent_signals); renderEngine(d);\n'
