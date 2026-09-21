@@ -87,7 +87,7 @@ def test_display_categories_are_filtered_confirmed_and_passed(tmp_path):
 
 def test_fast_default_and_exact_hour_schedule_label():
     settings = SettingsStore("/path/that/does/not/exist/settings.json").get()
-    assert settings.scan_workers == 50
+    assert settings.scan_workers == 100
     assert settings.public_dict()["schedule"] == "Hourly at HH:00 UTC"
 
 
@@ -95,12 +95,24 @@ def test_existing_default_worker_setting_migrates_once(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text('{"scan_workers": 8}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
-    assert migrated.scan_workers == 50
-    assert migrated.settings_revision == 2
+    assert migrated.scan_workers == 100
+    assert migrated.settings_revision == 3
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 8})
     assert SettingsStore(str(path)).get().scan_workers == 8
+
+
+def test_previous_fast_worker_default_migrates_to_100_once(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{"settings_revision": 2, "scan_workers": 50}', encoding="utf-8")
+    migrated = SettingsStore(str(path)).get()
+    assert migrated.scan_workers == 100
+    assert migrated.settings_revision == 3
+
+    store = SettingsStore(str(path))
+    store.update({"scan_workers": 50})
+    assert SettingsStore(str(path)).get().scan_workers == 50
 
 
 def test_previous_completed_daily_uses_immediately_prior_utc_day():

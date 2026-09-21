@@ -12,6 +12,8 @@ The agent does not use AI discretion to invent trades. It scans independently in
 
 The universe matches the original phone scanner: Binance 24H-ticker symbols ending in USDT, excluding names containing UP/DOWN/BULL/BEAR, ranked by quote volume and capped by the editable Top N setting.
 
+The cloud scanner uses 100 concurrent market-data workers and a 200-connection reuse pool by default. This changes transport time only; every symbol still downloads the same configured hourly history and runs every App and indicator rule.
+
 A BUY is allowed only when **all** of these pass on a completed 1H candle:
 
 **App layer**

@@ -38,7 +38,7 @@ TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
 @dataclass
 class BotConfig:
     max_symbols: int = 1000
-    scan_workers: int = 50
+    scan_workers: int = 100
     hourly_history_bars: int = 1000
     quote_asset: str = "USDT"
 
@@ -116,7 +116,7 @@ class PublicMarketClient:
         self.s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
         # Keep enough reusable connections for the scanner's parallel workers.
         # This changes transport latency only; strategy calculations are untouched.
-        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=0)
+        adapter = HTTPAdapter(pool_connections=200, pool_maxsize=200, max_retries=0)
         self.s.mount("https://", adapter)
 
     def get(self, path: str, params: Optional[dict] = None):

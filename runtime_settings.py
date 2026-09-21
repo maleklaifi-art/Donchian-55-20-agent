@@ -11,10 +11,10 @@ from typing import Any, Dict
 
 @dataclass
 class RuntimeSettings:
-    settings_revision: int = 2
+    settings_revision: int = 3
     top_n: int = 1000
     hourly_history_bars: int = 1000
-    scan_workers: int = 50
+    scan_workers: int = 100
     app_minimum_surge: float = 1.5
     indicator_volume_lookback: int = 168
     indicator_minimum_surge: float = 1.5
@@ -51,8 +51,10 @@ class SettingsStore:
             self._value = self._validated(raw, self._value)
             if previous_revision < 2 and self._value.scan_workers == 8:
                 self._value.scan_workers = 50
-            self._value.settings_revision = 2
-            if previous_revision < 2:
+            if previous_revision < 3 and self._value.scan_workers == 50:
+                self._value.scan_workers = 100
+            self._value.settings_revision = 3
+            if previous_revision < 3:
                 self._write(self._value)
         except Exception as exc:
             raise RuntimeError(f"settings file is unreadable: {self.path}: {exc}") from exc
@@ -71,7 +73,7 @@ class SettingsStore:
         value.settings_revision = int(raw.get("settings_revision", value.settings_revision))
         value.top_n = self._number(raw, "top_n", value.top_n, 1, 1000, True)
         value.hourly_history_bars = self._number(raw, "hourly_history_bars", value.hourly_history_bars, 240, 1000, True)
-        value.scan_workers = self._number(raw, "scan_workers", value.scan_workers, 1, 50, True)
+        value.scan_workers = self._number(raw, "scan_workers", value.scan_workers, 1, 100, True)
         value.app_minimum_surge = self._number(raw, "app_minimum_surge", value.app_minimum_surge, 0.1, 20.0)
         value.indicator_volume_lookback = self._number(raw, "indicator_volume_lookback", value.indicator_volume_lookback, 1, 500, True)
         value.indicator_minimum_surge = self._number(raw, "indicator_minimum_surge", value.indicator_minimum_surge, 0.1, 20.0)
