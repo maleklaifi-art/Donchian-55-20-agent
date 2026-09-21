@@ -1,11 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
-
-
-DAY_MS = 86_400_000
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -22,20 +20,14 @@ class Candle:
 
 @dataclass
 class StrategyConfig:
-    # App stage.
-    app_minimum_surge: float = 1.5
-    max_confirmed_age_minutes: int = 50
-
-    # Exact pasted Pine indicator inputs.
+    app_minimum_surge: float = 1.5          # strict > 1.5
     indicator_volume_lookback: int = 168
-    indicator_minimum_surge: float = 1.5
+    indicator_minimum_surge: float = 1.5    # >= 1.5
     minimum_close_position: float = 0.75
-    pine_minimum_reward_risk: float = 1.0
+    pine_minimum_reward_risk: float = 1.0   # Pine confidence-score baseline
+    minimum_reward_risk: float = 2.0        # inclusive >= 2
+    maximum_reward_risk: float = 4.0        # inclusive <= 4
     swing_length: int = 50
-
-    # Extra autonomous-agent gate requested by the user, applied AFTER Pine validBreakout.
-    minimum_reward_risk: float = 2.0
-    maximum_reward_risk: float = 4.0
 
 
 @dataclass
@@ -46,6 +38,8 @@ class Signal:
     entry: float
     tp: float
     sl: float
+    classic_pivot: float
+    strong_high_filter: float
     rr: float
     box_high: float
     box_low: float
@@ -59,92 +53,133 @@ class Signal:
         return asdict(self)
 
 
-def _day_id(ms: int) -> int:
-    return int(ms) // DAY_MS
+@dataclass
+class PhaseOneSignal:
+    symbol: str
+    signal_close_ms: int
+    close_time_utc: str
+    entry: float
+    previous_close: float
+    box_high: float
+    box_low: float
+    app_volume_surge: float
+
+    def to_dict(self):
+        return asdict(self)
 
 
-def _latest_closed_hour_index(hourly: List[Candle], now_ms: int) -> int:
-    """Do not assume Binance has already published the new live row at exactly :00."""
-    idx = -1
-    for i, bar in enumerate(hourly):
-        if bar.close_time < now_ms:
-            idx = i
+@dataclass
+class Evaluation:
+    symbol: str
+    price: float
+    phase_one: Optional[PhaseOneSignal] = None
+    signal: Optional[Signal] = None
+    rejection_stage: Optional[str] = None
+    rejection_reason: Optional[str] = None
+
+    def filtered_dict(self):
+        return {
+            "symbol": self.symbol,
+            "price": self.price,
+            "stage": self.rejection_stage or "Unknown",
+            "reason": self.rejection_reason or "No valid signal",
+            "phase_one_passed": self.phase_one is not None,
+        }
+
+
+def is_closed(c: Candle, now_ms: int) -> bool:
+    return c.close_time < now_ms
+
+
+def _utc_day(ms: int) -> int:
+    return ms // 86_400_000
+
+
+def build_daily(hourly: List[Candle]) -> List[Candle]:
+    """Aggregate closed 1H candles into UTC daily candles."""
+    if not hourly:
+        return []
+    out: List[Candle] = []
+    cur_day = None
+    o = h = l = c = vol = qv = None
+    open_ms = close_ms = None
+    for bar in hourly:
+        day = _utc_day(bar.open_time)
+        if cur_day is None or day != cur_day:
+            if cur_day is not None:
+                out.append(Candle(open_ms, o, h, l, c, vol, close_ms, qv))
+            cur_day = day
+            open_ms = bar.open_time
+            o, h, l, c = bar.open, bar.high, bar.low, bar.close
+            vol, qv = bar.volume, bar.quote_volume
+            close_ms = bar.close_time
         else:
-            break
-    return idx
+            h = max(h, bar.high)
+            l = min(l, bar.low)
+            c = bar.close
+            vol += bar.volume
+            qv += bar.quote_volume
+            close_ms = bar.close_time
+    out.append(Candle(open_ms, o, h, l, c, vol, close_ms, qv))
+    return out
 
 
-def find_nr7_daily(daily: List[Candle]) -> Optional[Tuple[float, float]]:
-    """App/current-time latest completed NR7 box."""
-    if len(daily) < 10:
+def latest_prior_nr7_box(hourly: List[Candle], signal_index: int) -> Optional[Tuple[float, float]]:
+    """Latest NR7 from a PRIOR completed UTC day, matching the app/Pine state."""
+    sig_day = _utc_day(hourly[signal_index].open_time)
+    prior_hourly = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
+    daily = build_daily(prior_hourly)
+    if len(daily) < 7:
         return None
+    box = None
     ranges = [d.high - d.low for d in daily]
-    # Last row is normally the current forming UTC day.
-    current_idx = len(daily) - 1
-    for i in range(current_idx - 1, 6, -1):
-        last7 = ranges[i - 6:i + 1]
-        if len(last7) == 7 and ranges[i] <= min(last7):
-            return daily[i].high, daily[i].low
-    return None
+    for i in range(6, len(daily)):
+        if ranges[i] <= min(ranges[i - 6 : i + 1]):
+            box = (daily[i].high, daily[i].low)
+    return box
 
 
-def pine_nr7_box_at_signal(daily: List[Candle], signal_bar: Candle) -> Optional[Tuple[float, float]]:
-    """Reconstruct Pine var boxHigh/boxLow as they existed on the signal bar.
+def previous_completed_daily(hourly: List[Candle], signal_index: int) -> Optional[Candle]:
+    """Immediately previous completed UTC daily candle for Classic Pivot R2."""
+    sig_day = _utc_day(hourly[signal_index].open_time)
+    prior_hourly = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
+    daily = build_daily(prior_hourly)
+    return daily[-1] if daily else None
 
-    Pine updates the box only at the first bar of a new UTC day using the
-    previous completed daily candle. Therefore a 23:00-23:59 breakout must NOT
-    use that same day's daily range even when the cloud evaluates it after 00:00.
-    """
-    signal_day = _day_id(signal_bar.open_time)
-    completed = [d for d in daily if _day_id(d.open_time) < signal_day]
-    if len(completed) < 7:
+
+def app_volume_surge(hourly: List[Candle], signal_index: int) -> Optional[float]:
+    """App rule: current UTC day's accumulated quote volume / prior 8 full UTC days average."""
+    sig_day = _utc_day(hourly[signal_index].open_time)
+    today_qv = sum(
+        x.quote_volume for x in hourly[: signal_index + 1]
+        if _utc_day(x.open_time) == sig_day
+    )
+    prior = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
+    daily = build_daily(prior)
+    if len(daily) < 8:
         return None
-    ranges = [d.high - d.low for d in completed]
-    for i in range(len(completed) - 1, 5, -1):
-        last7 = ranges[i - 6:i + 1]
-        if ranges[i] <= min(last7):
-            return completed[i].high, completed[i].low
-    return None
+    baseline = sum(x.quote_volume for x in daily[-8:]) / 8.0
+    if baseline <= 0:
+        return None
+    return today_qv / baseline
 
 
-def previous_completed_daily_at_signal(daily: List[Candle], signal_bar: Candle) -> Optional[Candle]:
-    """Equivalent to request.security(..., 'D', high/low/close[1]) on the signal bar."""
-    signal_day = _day_id(signal_bar.open_time)
-    completed = [d for d in daily if _day_id(d.open_time) < signal_day]
-    return completed[-1] if completed else None
-
-
-def app_stablecoin(daily: List[Candle], current_price: float) -> bool:
+def is_stablecoin_at_signal(hourly: List[Candle], signal_index: int) -> bool:
+    """Causal reproduction of the saved app's up-to-20-daily-bar stablecoin filter."""
+    partial = hourly[max(0, signal_index - 24 * 21): signal_index + 1]
+    daily = build_daily(partial)[-20:]
     if len(daily) < 10:
         return False
-    recent = daily[-20:]
-    price_range = max(x.high for x in recent) - min(x.low for x in recent)
-    range_pct = (price_range / current_price) * 100.0 if current_price > 0 else 100.0
-    if range_pct < 3.0:
-        return True
-    vals = [((x.high - x.low) / x.close * 100.0) for x in recent if x.close > 0]
-    if not vals:
+    price = partial[-1].close
+    if price <= 0:
         return False
-    avg_range = sum(vals) / len(vals)
-    if avg_range < 0.4:
+    range_pct = (max(d.high for d in daily) - min(d.low for d in daily)) / price * 100.0
+    avg_range = sum(((d.high - d.low) / d.close * 100.0) for d in daily if d.close > 0) / len(daily)
+    if range_pct < 3.0 or avg_range < 0.4:
         return True
-    for peg in (1.0, 0.1):
-        if abs(current_price - peg) / peg < 0.15 and avg_range < 1.0:
-            return True
-    return 1500 < current_price < 5000 and avg_range < 0.5
-
-
-def exact_app_volume_surge(daily: List[Candle]) -> Optional[float]:
-    if len(daily) < 2:
-        return None
-    p = len(daily) - 1
-    prior = daily[max(0, p - 8):p]
-    if not prior:
-        return None
-    avg = sum(x.quote_volume for x in prior) / len(prior)
-    if avg <= 0:
-        return None
-    return daily[p].quote_volume / avg
+    if any(abs(price - peg) / peg < 0.15 for peg in (1.0, 0.1)) and avg_range < 1.0:
+        return True
+    return 1500 < price < 5000 and avg_range < 0.5
 
 
 def _crossover(prev_close: float, close: float, level: Optional[float]) -> bool:
@@ -155,36 +190,33 @@ def _crossunder(prev_close: float, close: float, level: Optional[float]) -> bool
     return level is not None and prev_close >= level > close
 
 
-def strong_pivot_state(candles: List[Candle], swing_length: int) -> Tuple[bool, Optional[float]]:
-    """Line-for-line state translation of the pasted LuxAlgo-compatible filter."""
+def strong_pivot_state(candles: List[Candle], swing_length: int):
+    """Translation of the saved Pine LuxAlgo-compatible state over closed 1H candles."""
+    out: List[Tuple[bool, Optional[float]]] = []
     swing_leg = 0
-    current_swing_high: Optional[float] = None
-    current_swing_low: Optional[float] = None
+    current_swing_high = None
+    current_swing_low = None
     swing_high_crossed = False
     swing_low_crossed = False
     swing_trend = 0
     confirmed_highs: List[Tuple[float, int]] = []
 
     for i, c in enumerate(candles):
-        # Pine removes a confirmed high only when a LATER bar touches it.
         confirmed_highs = [
-            (level, confirmation_bar)
-            for (level, confirmation_bar) in confirmed_highs
-            if not (i > confirmation_bar and c.high >= level)
+            (lvl, bar) for (lvl, bar) in confirmed_highs
+            if not (i > bar and c.high >= lvl)
         ]
 
         previous_leg = swing_leg
-        pivot_i = i - swing_length
         new_leg_high = False
         new_leg_low = False
-
+        pivot_i = i - swing_length
         if pivot_i >= 0:
-            # Pine ta.highest(high, swingLength) / ta.lowest() on the current bar
-            # covers current through swingLength-1 bars ago; high[swingLength]
-            # and low[swingLength] are the candidate pivot values just outside it.
-            recent = candles[i - swing_length + 1:i + 1]
-            new_leg_high = candles[pivot_i].high > max(x.high for x in recent)
-            new_leg_low = candles[pivot_i].low < min(x.low for x in recent)
+            recent = candles[i - swing_length + 1: i + 1]
+            recent_high = max(x.high for x in recent)
+            recent_low = min(x.low for x in recent)
+            new_leg_high = candles[pivot_i].high > recent_high
+            new_leg_low = candles[pivot_i].low < recent_low
 
         if new_leg_high:
             swing_leg = 0
@@ -199,389 +231,194 @@ def strong_pivot_state(candles: List[Candle], swing_length: int) -> Tuple[bool, 
             current_swing_high = candles[pivot_i].high
             swing_high_crossed = False
             confirmed_highs.append((current_swing_high, i))
-
         if new_pivot_low and pivot_i >= 0:
             current_swing_low = candles[pivot_i].low
             swing_low_crossed = False
 
         if i > 0:
-            prev_close = candles[i - 1].close
-            if (
-                current_swing_high is not None
-                and _crossover(prev_close, c.close, current_swing_high)
-                and not swing_high_crossed
-            ):
+            pc = candles[i - 1].close
+            if current_swing_high is not None and _crossover(pc, c.close, current_swing_high) and not swing_high_crossed:
                 swing_high_crossed = True
                 swing_trend = 1
-
-            if (
-                current_swing_low is not None
-                and _crossunder(prev_close, c.close, current_swing_low)
-                and not swing_low_crossed
-            ):
+            if current_swing_low is not None and _crossunder(pc, c.close, current_swing_low) and not swing_low_crossed:
                 swing_low_crossed = True
                 swing_trend = -1
 
-    current_high_is_strong = swing_trend == -1
-    fixed_strong_high_filter: Optional[float] = None
-
-    if current_high_is_strong and candles and confirmed_highs:
-        breakout_high = candles[-1].high
-        for level, _ in confirmed_highs:
-            if level > breakout_high and (
-                fixed_strong_high_filter is None or level < fixed_strong_high_filter
-            ):
-                fixed_strong_high_filter = level
-
-    return current_high_is_strong, fixed_strong_high_filter
-
-
-def previous_day_pivot_r2_at_signal(
-    daily: List[Candle], signal_bar: Candle
-) -> Tuple[Optional[float], Optional[float]]:
-    previous = previous_completed_daily_at_signal(daily, signal_bar)
-    if previous is None:
-        return None, None
-    classic_pivot = (previous.high + previous.low + previous.close) / 3.0
-    pivot_r2 = classic_pivot + (previous.high - previous.low)
-    return classic_pivot, pivot_r2
+        current_high_is_strong = swing_trend == -1
+        target = None
+        if current_high_is_strong:
+            eligible = [lvl for (lvl, _) in confirmed_highs if lvl > c.high]
+            if eligible:
+                target = min(eligible)
+        out.append((current_high_is_strong, target))
+    return out
 
 
 def _confidence(indicator_surge: float, close_position: float, rr: float, cfg: StrategyConfig):
-    """Exact Pine confidence formula: it uses Pine minimumRewardRisk=1.0."""
-    volume_strength = min(
-        max((indicator_surge - cfg.indicator_minimum_surge) / cfg.indicator_minimum_surge, 0.0),
-        1.0,
-    )
-    close_position_room = 1.0 - cfg.minimum_close_position
-    close_strength = (
-        min(max((close_position - cfg.minimum_close_position) / close_position_room, 0.0), 1.0)
-        if close_position_room > 0
-        else 1.0
-    )
-    reward_risk_strength = min(
-        max((rr - cfg.pine_minimum_reward_risk) / 2.0, 0.0),
-        1.0,
-    )
-    score = round(
-        50.0
-        + 20.0 * volume_strength
-        + 15.0 * close_strength
-        + 15.0 * reward_risk_strength
-    )
+    volume_strength = min(max((indicator_surge - cfg.indicator_minimum_surge) / cfg.indicator_minimum_surge, 0.0), 1.0)
+    close_room = 1.0 - cfg.minimum_close_position
+    close_strength = 1.0 if close_room <= 0 else min(max((close_position - cfg.minimum_close_position) / close_room, 0.0), 1.0)
+    rr_strength = min(max((rr - cfg.pine_minimum_reward_risk) / 2.0, 0.0), 1.0)
+    raw = 50.0 + 20.0 * volume_strength + 15.0 * close_strength + 15.0 * rr_strength
+    score = int(math.floor(raw + 0.5))
     level = "HIGH" if score >= 80 else ("MEDIUM" if score >= 65 else "LOW")
     return score, level
 
 
-def app_scan_trace(
+def reward_risk_is_accepted(rr: float, minimum: float = 2.0, maximum: float = 4.0) -> bool:
+    """Final mobile-parity R:R gate. Both 2.00 and 4.00 are accepted."""
+    return minimum <= rr <= maximum
+
+
+def latest_nr7_box_from_daily(daily: List[Candle], signal_day: int, now_ms: int) -> Optional[Tuple[float, float]]:
+    """Find the latest completed NR7 box from an explicit daily fallback history."""
+    completed = [d for d in daily if d.close_time < now_ms and _utc_day(d.open_time) < signal_day]
+    if len(completed) < 7:
+        return None
+    ranges = [d.high - d.low for d in completed]
+    box = None
+    for i in range(6, len(completed)):
+        if ranges[i] <= min(ranges[i - 6:i + 1]):
+            box = (completed[i].high, completed[i].low)
+    return box
+
+
+def evaluate_latest_detailed(
     symbol: str,
-    daily: List[Candle],
     hourly: List[Candle],
-    current_price: float,
     cfg: StrategyConfig,
     now_ms: int,
-) -> Dict:
-    """Classify one symbol at the app stage for the latest-scan dashboard."""
-    row: Dict = {
-        "symbol": symbol,
-        "price": current_price,
-        "category": "Filter",
-        "reason": "",
-        "app_volume_surge": None,
-        "box_high": None,
-        "box_low": None,
-        "status": "FILTERED",
-    }
+    box_override: Optional[Tuple[float, float]] = None,
+) -> Evaluation:
+    hourly = [c for c in hourly if is_closed(c, now_ms)]
+    price = hourly[-1].close if hourly else 0.0
 
-    if len(daily) < 10:
-        row["category"] = "Data"
-        row["reason"] = "Not enough 1D data"
-        return row
-    if len(hourly) < 2:
-        row["category"] = "Data"
-        row["reason"] = "Not enough 1H data"
-        return row
+    def reject(stage: str, reason: str, phase_one: Optional[PhaseOneSignal] = None) -> Evaluation:
+        return Evaluation(symbol, price, phase_one, None, stage, reason)
 
-    if app_stablecoin(daily, current_price):
-        row["category"] = "Filter"
-        row["reason"] = "Stablecoin / low volatility"
-        return row
+    min_bars = max(cfg.indicator_volume_lookback + 2, cfg.swing_length * 2 + 3, 24 * 10)
+    if len(hourly) < min_bars:
+        return reject("Data", f"Need {min_bars} completed 1H candles; received {len(hourly)}")
 
-    box = find_nr7_daily(daily)
+    i = len(hourly) - 1
+    c, p = hourly[i], hourly[i - 1]
+
+    box = box_override or latest_prior_nr7_box(hourly, i)
     if box is None:
-        row["category"] = "NR7"
-        row["reason"] = "No NR7 box"
-        return row
+        return reject("NR7", "No completed prior UTC-day NR7 box in the fast history window")
     box_high, box_low = box
-    row["box_high"] = box_high
-    row["box_low"] = box_low
 
-    surge = exact_app_volume_surge(daily)
-    row["app_volume_surge"] = surge
-    if surge is None:
-        row["category"] = "Volume"
-        row["reason"] = "Volume baseline unavailable"
-        return row
-    if surge < cfg.app_minimum_surge:
-        row["category"] = "Volume"
-        row["reason"] = f"Vol surge {surge:.2f}x < {cfg.app_minimum_surge:.2f}x"
-        return row
-
-    signal_idx = _latest_closed_hour_index(hourly, now_ms)
-    if signal_idx < 1:
-        row["category"] = "Data"
-        row["reason"] = "No completed 1H breakout candle available"
-        return row
-
-    last_completed = hourly[signal_idx]
-    before_that = hourly[signal_idx - 1]
-    confirmed = last_completed.close > box_high and before_that.close <= box_high
-
-    age_minutes = int(max(0, now_ms - last_completed.close_time) // 60_000)
-    if confirmed and age_minutes <= cfg.max_confirmed_age_minutes:
-        row["status"] = "CONFIRMED"
-        row["category"] = "Confirmed"
-        row["reason"] = f"Fresh confirmed breakout ({age_minutes} min old)"
-        row["signal_close_ms"] = last_completed.close_time
-        return row
-
-    row["category"] = "Breakout"
-    if confirmed:
-        row["reason"] = (
-            f"Confirmed breakout is {age_minutes} min old > "
-            f"{cfg.max_confirmed_age_minutes} min"
+    # Shared app + indicator confirmed breakout condition.
+    if not (c.close > box_high and p.close <= box_high):
+        return reject(
+            "App Breakout",
+            f"Closed 1H cross failed: close={c.close:.12g} prev={p.close:.12g} boxHigh={box_high:.12g}",
         )
-    else:
-        row["reason"] = "No fresh confirmed breakout"
-    return row
 
+    # APP CONDITIONS.
+    app_surge = app_volume_surge(hourly, i)
+    if app_surge is None:
+        return reject("App Volume", "Insufficient prior daily quote-volume baseline")
+    if not (app_surge > cfg.app_minimum_surge):
+        return reject("App Volume", f"{app_surge:.4f}x is not strictly > {cfg.app_minimum_surge:g}x")
+    if is_stablecoin_at_signal(hourly, i):
+        return reject("Stablecoin", "Saved app stablecoin / low-volatility filter")
 
-def evaluate_latest(
-    symbol: str,
-    daily: List[Candle],
-    hourly: List[Candle],
-    current_price: float,
-    cfg: StrategyConfig,
-    now_ms: int,
-) -> Tuple[Optional[Signal], Optional[Dict]]:
-    """Exact pasted Pine indicator, followed by the extra strict 2 < R:R < 4 gate."""
-    if len(daily) < 10 or len(hourly) < max(
-        cfg.indicator_volume_lookback + 1,
-        cfg.swing_length + 2,
-    ):
-        return None, None
-
-    # ----- APP STAGE -----
-    if app_stablecoin(daily, current_price):
-        return None, None
-
-    app_box = find_nr7_daily(daily)
-    if app_box is None:
-        return None, None
-    app_box_high, app_box_low = app_box
-
-    app_surge = exact_app_volume_surge(daily)
-    if app_surge is None or app_surge < cfg.app_minimum_surge:
-        return None, None
-
-    signal_idx = _latest_closed_hour_index(hourly, now_ms)
-    if signal_idx < 1:
-        return None, None
-
-    c = hourly[signal_idx]
-    p = hourly[signal_idx - 1]
-    app_confirmed_breakout = c.close > app_box_high and p.close <= app_box_high
-    if not app_confirmed_breakout:
-        return None, None
-
-    age_minutes = int(max(0, now_ms - c.close_time) // 60_000)
-    if cfg.max_confirmed_age_minutes >= 0 and age_minutes > cfg.max_confirmed_age_minutes:
-        return None, None
-
-    close_time_utc = datetime.fromtimestamp(
-        c.close_time / 1000,
-        tz=timezone.utc,
-    ).isoformat()
-
-    # ----- EXACT PASTED PINE INDICATOR STAGE -----
-    pine_box = pine_nr7_box_at_signal(daily, c)
-    pine_box_high = pine_box[0] if pine_box else None
-    pine_box_low = pine_box[1] if pine_box else None
-
-    pine_confirmed_breakout = (
-        pine_box_high is not None
-        and c.close > pine_box_high
-        and p.close <= pine_box_high
+    closed_at = datetime.fromtimestamp(c.close_time / 1000, tz=timezone.utc).isoformat()
+    phase_one = PhaseOneSignal(
+        symbol=symbol,
+        signal_close_ms=c.close_time,
+        close_time_utc=closed_at,
+        entry=c.close,
+        previous_close=p.close,
+        box_high=box_high,
+        box_low=box_low,
+        app_volume_surge=app_surge,
     )
 
-    prior_volumes = hourly[
-        signal_idx - cfg.indicator_volume_lookback:signal_idx
-    ]
-    indicator_surge: Optional[float] = None
-    if len(prior_volumes) == cfg.indicator_volume_lookback:
-        average_volume = (
-            sum(x.volume for x in prior_volumes)
-            / cfg.indicator_volume_lookback
+    # INDICATOR CONDITIONS.
+    prior_volumes = [x.volume for x in hourly[i - cfg.indicator_volume_lookback:i]]
+    if len(prior_volumes) != cfg.indicator_volume_lookback:
+        return reject("Indicator Volume", "Incomplete hourly volume lookback", phase_one)
+    avg_vol = sum(prior_volumes) / len(prior_volumes)
+    if avg_vol <= 0:
+        return reject("Indicator Volume", "Prior hourly average volume is zero", phase_one)
+    indicator_surge = c.volume / avg_vol
+    if indicator_surge < cfg.indicator_minimum_surge:
+        return reject(
+            "Indicator Volume",
+            f"{indicator_surge:.4f}x < {cfg.indicator_minimum_surge:g}x",
+            phase_one,
         )
-        if average_volume > 0:
-            indicator_surge = c.volume / average_volume
 
     candle_range = c.high - c.low
-    close_position = (
-        (c.close - c.low) / candle_range
-        if candle_range > 0
-        else 0.0
-    )
-
-    current_high_is_strong, fixed_strong_high_filter = strong_pivot_state(
-        hourly[:signal_idx + 1],
-        cfg.swing_length,
-    )
-
-    classic_pivot, pivot_r2_target = previous_day_pivot_r2_at_signal(daily, c)
-
-    risk = (
-        c.close - pine_box_low
-        if pine_box_low is not None
-        else None
-    )
-    reward = (
-        pivot_r2_target - c.close
-        if pivot_r2_target is not None
-        else None
-    )
-    reward_risk = (
-        reward / risk
-        if reward is not None and risk is not None and risk > 0
-        else None
-    )
-    pivot_r2_above_breakout = (
-        pivot_r2_target is not None
-        and pivot_r2_target > c.high
-    )
-
-    pine_failures: List[str] = []
-
-    if not pine_confirmed_breakout:
-        pine_failures.append("Pine confirmed NR7 breakout is false")
-
-    if indicator_surge is None:
-        pine_failures.append("Indicator volume baseline unavailable")
-    elif indicator_surge < cfg.indicator_minimum_surge:
-        pine_failures.append(
-            f"1H volume surge {indicator_surge:.2f}x < "
-            f"{cfg.indicator_minimum_surge:.2f}x"
-        )
-
+    close_position = (c.close - c.low) / candle_range if candle_range > 0 else 0.0
     if close_position < cfg.minimum_close_position:
-        pine_failures.append(
-            f"Close position {close_position:.3f} < "
-            f"{cfg.minimum_close_position:.2f}"
+        return reject(
+            "Close Position",
+            f"{close_position:.4f} < {cfg.minimum_close_position:g}",
+            phase_one,
         )
 
+    states = strong_pivot_state(hourly, cfg.swing_length)
+    current_high_is_strong, strong_high_filter = states[i]
     if not current_high_is_strong:
-        pine_failures.append("Strong High state is false")
-    elif fixed_strong_high_filter is None:
-        pine_failures.append(
-            "No confirmed unrevisited Strong High above the breakout candle"
+        return reject("Strong High", "LuxAlgo-compatible Strong High state is not active", phase_one)
+    if strong_high_filter is None or not (strong_high_filter > c.high):
+        return reject(
+            "Strong High Filter",
+            "No confirmed unrevisited pivot high above the breakout candle",
+            phase_one,
         )
 
-    if pivot_r2_target is None:
-        pine_failures.append("Previous-day Pivot R2 unavailable")
-    elif not pivot_r2_above_breakout:
-        pine_failures.append(
-            f"Pivot R2 {pivot_r2_target:.8g} is not above "
-            f"breakout high {c.high:.8g}"
+    # Strong High remains an entry filter only. The actual TP is Classic
+    # Pivot R2 from the immediately previous completed UTC daily candle.
+    previous_daily = previous_completed_daily(hourly, i)
+    if previous_daily is None:
+        return reject("Pivot R2", "No previous completed UTC daily candle", phase_one)
+    classic_pivot = (previous_daily.high + previous_daily.low + previous_daily.close) / 3.0
+    pivot_r2_target = classic_pivot + (previous_daily.high - previous_daily.low)
+    if not (pivot_r2_target > c.high):
+        return reject(
+            "Pivot R2",
+            f"Previous-day Pivot R2 {pivot_r2_target:.12g} is not above breakout high {c.high:.12g}",
+            phase_one,
         )
 
-    if risk is None or risk <= 0:
-        pine_failures.append("Entry-to-box-low risk is not positive")
-    elif reward_risk is None:
-        pine_failures.append("Pivot R2 reward/risk unavailable")
-    elif reward_risk <= cfg.pine_minimum_reward_risk:
-        pine_failures.append(
-            f"Pine R:R {reward_risk:.2f} <= "
-            f"{cfg.pine_minimum_reward_risk:.2f}"
+    risk = c.close - box_low
+    reward = pivot_r2_target - c.close
+    if risk <= 0 or reward <= 0:
+        return reject("R:R", "Non-positive risk or reward", phase_one)
+    rr = reward / risk
+    if not reward_risk_is_accepted(rr, cfg.minimum_reward_risk, cfg.maximum_reward_risk):
+        return reject(
+            "R:R",
+            f"{rr:.4f} is outside inclusive [{cfg.minimum_reward_risk:g}, {cfg.maximum_reward_risk:g}]",
+            phase_one,
         )
 
-    # Pine confidence is calculated from the Pine inputs, not the extra 2R gate.
-    confidence_score = None
-    confidence_level = None
-    if (
-        indicator_surge is not None
-        and reward_risk is not None
-    ):
-        confidence_score, confidence_level = _confidence(
-            float(indicator_surge),
-            close_position,
-            float(reward_risk),
-            cfg,
-        )
-
-    # ----- EXTRA AGENT R:R GATE REQUESTED BY USER -----
-    rr_failures: List[str] = []
-    if reward_risk is None:
-        rr_failures.append("Agent R:R unavailable")
-    else:
-        if reward_risk <= cfg.minimum_reward_risk:
-            rr_failures.append(
-                f"Agent R:R {reward_risk:.2f} <= "
-                f"{cfg.minimum_reward_risk:.2f}"
-            )
-        if reward_risk >= cfg.maximum_reward_risk:
-            rr_failures.append(
-                f"Agent R:R {reward_risk:.2f} >= "
-                f"{cfg.maximum_reward_risk:.2f}"
-            )
-
-    failures = pine_failures + rr_failures
-
-    candidate = {
-        "symbol": symbol,
-        "signal_close_ms": c.close_time,
-        "close_time_utc": close_time_utc,
-        "entry": c.close,
-        "tp": pivot_r2_target,
-        "sl": pine_box_low,
-        "rr": reward_risk,
-        "box_high": pine_box_high,
-        "box_low": pine_box_low,
-        "app_box_high": app_box_high,
-        "app_box_low": app_box_low,
-        "app_volume_surge": app_surge,
-        "indicator_volume_surge": indicator_surge,
-        "close_position": close_position,
-        "confidence_score": confidence_score,
-        "confidence_level": confidence_level,
-        "age_minutes": age_minutes,
-        "app_pass": True,
-        "indicator_pass": not pine_failures,
-        "rr_gate_pass": not rr_failures,
-        "strong_high_state": current_high_is_strong,
-        "fixed_strong_high_filter": fixed_strong_high_filter,
-        "classic_pivot": classic_pivot,
-        "pivot_r2_target": pivot_r2_target,
-        "reason": "; ".join(failures) if failures else None,
-    }
-
-    if failures:
-        return None, candidate
-
+    score, level = _confidence(indicator_surge, close_position, rr, cfg)
     signal = Signal(
         symbol=symbol,
         signal_close_ms=c.close_time,
-        close_time_utc=close_time_utc,
+        close_time_utc=closed_at,
         entry=c.close,
-        tp=float(pivot_r2_target),
-        sl=float(pine_box_low),
-        rr=float(reward_risk),
-        box_high=float(pine_box_high),
-        box_low=float(pine_box_low),
+        tp=pivot_r2_target,
+        sl=box_low,
+        classic_pivot=classic_pivot,
+        strong_high_filter=strong_high_filter,
+        rr=rr,
+        box_high=box_high,
+        box_low=box_low,
         app_volume_surge=app_surge,
-        indicator_volume_surge=float(indicator_surge),
+        indicator_volume_surge=indicator_surge,
         close_position=close_position,
-        confidence_score=int(confidence_score),
-        confidence_level=str(confidence_level),
+        confidence_score=score,
+        confidence_level=level,
     )
+    return Evaluation(symbol, price, phase_one, signal)
 
-    return signal, candidate
+
+def evaluate_latest(symbol: str, hourly: List[Candle], cfg: StrategyConfig, now_ms: int) -> Optional[Signal]:
+    """Compatibility wrapper used by the CLI and existing tests."""
+    return evaluate_latest_detailed(symbol, hourly, cfg, now_ms).signal

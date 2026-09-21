@@ -1,26 +1,21 @@
 # Verification performed
 
-Before packaging this build, the following checks were run successfully:
+Checks completed for this cloud source bundle:
 
-- Python syntax compilation for `cloud_app.py`, `database.py`, `demo_trader.py`, `self_check.py`, and `strategy.py`.
-- Core price/quantity rounding helper checks.
-- Deterministic client-order ID checks.
-- Dashboard JavaScript syntax check with Node.js.
-- Local HTTP smoke test with the trading engine disabled:
-  - `/healthz` returned 200.
-  - login page returned 200.
-  - valid password created an authenticated session.
-  - dashboard returned 200.
-  - `/api/status` returned the expected JSON structure.
-- Persistent database lifecycle test:
-  - valid signal stored.
-  - trade marked OPEN.
-  - trade marked CLOSED at TP.
-  - realized R and USDT P&L aggregated correctly.
-- Position synchronization test with a simulated filled TP order:
-  - open position removed from state.
-  - detailed closed trade appended to state.
-  - entry/exit prices and gross P&L recorded.
-  - dashboard database counted the trade as a win.
+- Python syntax compilation passed for every top-level Python module.
+- All 11 automated tests passed.
+- Inclusive R:R boundaries passed: exactly 2.00 and 4.00 are accepted; values outside the configured interval are rejected.
+- Signal tests confirmed that TP is previous-day Classic Pivot R2 and Strong High remains an entry filter only.
+- A completed-candle freeze test confirmed that the same signal and volume values remain unchanged at 01:00 and 01:02 while the following candle is live.
+- The live-ask and post-fill gates receive the same editable R:R limits used by the scanner.
+- Post-fill absolute risk above $2 causes an emergency Testnet flatten.
+- Any filled entry, including one immediately flattened for safety, consumes the one-executed-trade-per-UTC-day limit.
+- The current Binance OCO request shape is covered by a test: `POST /api/v3/orderList/oco` with `aboveType=TAKE_PROFIT` and `belowType=STOP_LOSS`.
+- Runtime settings persistence and minimum/maximum R:R validation passed.
+- Dashboard database open-to-TP-close lifecycle, realized R, and USDT P&L aggregation passed.
+- Dashboard JavaScript syntax passed in Node.js.
+- Local HTTP smoke test passed with execution disabled: health, password login, authenticated dashboard, status JSON, CSRF, and settings update.
+- Live Binance public-market self-check passed during packaging.
+- Source scans found no embedded Telegram credential and no production execution URL.
 
-Not verified in this environment: a real authenticated Binance Spot Testnet order, because the user's Testnet API credentials are not available here.
+Not verified here: a real authenticated Binance Spot Testnet order, because no user Testnet credentials were available. The execution client is hard-wired to Binance Spot Testnet.

@@ -6,6 +6,7 @@ import os
 import secrets
 import threading
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,9 +25,10 @@ from demo_trader import (
     load_rules,
     load_state,
     place_signal,
-    scan_market,
+    scan_market_detailed,
     sync_positions,
 )
+from runtime_settings import RuntimeSettings, SettingsStore
 
 
 def utc_now():
@@ -48,7 +50,7 @@ class DashboardLogger(EventLogger):
         super().emit(event, **payload)
         try:
             self.db.record_event(event, payload)
-            if event in {"APP_CONFIRMED", "VALID_SIGNAL"}:
+            if event == "VALID_SIGNAL":
                 self.db.upsert_signal(payload)
             elif event == "TRADE_REJECTED":
                 sk = payload.get("signal_key")
@@ -67,21 +69,11 @@ class DashboardLogger(EventLogger):
 
 
 class CloudDemoEngine:
-    def __init__(self, cfg: BotConfig, db: TradeDatabase):
+    def __init__(self, cfg: BotConfig, db: TradeDatabase, settings_store: SettingsStore):
         self.cfg = cfg
         self.db = db
+        self.settings_store = settings_store
         self.logger = DashboardLogger(cfg.event_log, db)
-        self.scfg = StrategyConfig(
-            app_minimum_surge=1.5,
-            max_confirmed_age_minutes=cfg.max_confirmed_age_minutes,
-            indicator_volume_lookback=168,
-            indicator_minimum_surge=1.5,
-            minimum_close_position=0.75,
-            pine_minimum_reward_risk=1.0,
-            minimum_reward_risk=2.0,
-            maximum_reward_risk=4.0,
-            swing_length=50,
-        )
         self.market = PublicMarketClient(cfg.request_timeout_s)
         self.state_lock = threading.RLock()
         self.meta_lock = threading.RLock()
@@ -101,76 +93,29 @@ class CloudDemoEngine:
         self.last_price_refresh: Optional[str] = None
         self.live_prices: Dict[str, float] = {}
         self.testnet_free_usdt: Optional[float] = None
-        self.latest_scan_rows = []
+        self.last_scan_snapshot = {
+            "duration_seconds": 0.0,
+            "coins_scanned": 0,
+            "app_confirmed_count": 0,
+            "valid_count": 0,
+            "indicator_rejected_count": 0,
+            "error_count": 0,
+            "phase_one": [],
+            "signals": [],
+            "filtered": [],
+        }
+        self.telegram_alerted_file = Path(cfg.signal_log).with_name("telegram_alerted.json")
+        try:
+            self.telegram_alerted = set(json.loads(self.telegram_alerted_file.read_text(encoding="utf-8")))
+        except FileNotFoundError:
+            self.telegram_alerted = set()
+        except Exception:
+            self.telegram_alerted = set()
+        self.next_scan_at_ms = 0
         self.started_at = utc_now()
         self._configure_execution()
         with self.state_lock:
             self.db.backfill_state(load_state(self.cfg.state_file))
-
-    def editable_settings(self):
-        return {
-            "max_symbols": self.cfg.max_symbols,
-            "scan_workers": self.cfg.scan_workers,
-            "max_confirmed_age_minutes": self.cfg.max_confirmed_age_minutes,
-            "app_minimum_surge": self.scfg.app_minimum_surge,
-            "indicator_volume_lookback": self.scfg.indicator_volume_lookback,
-            "indicator_minimum_surge": self.scfg.indicator_minimum_surge,
-            "minimum_close_position": self.scfg.minimum_close_position,
-            "pine_minimum_reward_risk": self.scfg.pine_minimum_reward_risk,
-            "minimum_reward_risk": self.scfg.minimum_reward_risk,
-            "maximum_reward_risk": self.scfg.maximum_reward_risk,
-            "swing_length": self.scfg.swing_length,
-            "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
-            "max_risk_per_trade_usdt": self.cfg.max_risk_per_trade_usdt,
-            "max_open_positions": self.cfg.max_open_positions,
-            "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
-            "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
-            "schedule": "HOURLY_AT_00_UTC",
-        }
-
-    def apply_settings(self, raw: dict):
-        specs = {
-            "max_symbols": (int, 1, 1000),
-            "scan_workers": (int, 1, 50),
-            "max_confirmed_age_minutes": (int, 0, 59),
-            "app_minimum_surge": (float, 0.1, 100.0),
-            "indicator_volume_lookback": (int, 1, 500),
-            "indicator_minimum_surge": (float, 0.1, 100.0),
-            "minimum_close_position": (float, 0.0, 1.0),
-            "swing_length": (int, 10, 500),
-            "demo_equity_cap_usdt": (float, 10.0, 1000000.0),
-            "max_risk_per_trade_usdt": (float, 0.01, 100000.0),
-            "max_open_positions": (int, 1, 20),
-            "daily_loss_limit_r": (float, 0.1, 100.0),
-            "max_entry_drift_pct": (float, 0.0, 10.0),
-        }
-        parsed = {}
-        for key, (typ, lo, hi) in specs.items():
-            if key not in raw:
-                continue
-            try:
-                value = typ(raw[key])
-            except (TypeError, ValueError):
-                raise ValueError(f"{key} must be a valid number")
-            if value < lo or value > hi:
-                raise ValueError(f"{key} must be between {lo} and {hi}")
-            parsed[key] = value
-
-        with self.meta_lock:
-            for key in ("max_symbols","scan_workers","max_confirmed_age_minutes","demo_equity_cap_usdt",
-                        "max_risk_per_trade_usdt","max_open_positions","daily_loss_limit_r","max_entry_drift_pct"):
-                if key in parsed:
-                    setattr(self.cfg, key, parsed[key])
-            for key in ("app_minimum_surge","indicator_volume_lookback","indicator_minimum_surge",
-                        "minimum_close_position","swing_length"):
-                if key in parsed:
-                    setattr(self.scfg, key, parsed[key])
-
-            settings = self.editable_settings()
-            SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-
-        self.logger.emit("SETTINGS_UPDATED", settings=settings)
-        return settings
 
     def _configure_execution(self):
         if not self.credentials_configured:
@@ -213,19 +158,40 @@ class CloudDemoEngine:
         return not Path(self.cfg.kill_switch_file).exists()
 
     def _scanner_loop(self):
-        # Scan exactly once per hour, aligned to the top of the UTC hour.
-        # Example: 10:00, 11:00, 12:00 ... regardless of when the service started.
         while not self.stop_event.is_set():
-            now = time.time()
-            next_hour = (int(now // 3600) + 1) * 3600
-            self.scan_wakeup.clear()
-            woke_early = self.scan_wakeup.wait(timeout=max(1.0, next_hour - now))
-            if self.stop_event.is_set():
-                break
-            if woke_early:
-                # Manual START can wake the loop, but exact scheduling still waits for :00.
-                continue
             self._run_scan()
+            now = time.time()
+            next_hour = (int(now // 3600) + 1) * 3600 + 10
+            with self.meta_lock:
+                self.next_scan_at_ms = int(next_hour * 1000)
+            self.scan_wakeup.clear()
+            self.scan_wakeup.wait(timeout=max(15.0, next_hour - now))
+
+    def _apply_settings(self, settings: RuntimeSettings):
+        self.cfg.max_symbols = settings.top_n
+        self.cfg.hourly_history_bars = settings.hourly_history_bars
+        self.cfg.scan_workers = settings.scan_workers
+        return StrategyConfig(
+            app_minimum_surge=settings.app_minimum_surge,
+            indicator_volume_lookback=settings.indicator_volume_lookback,
+            indicator_minimum_surge=settings.indicator_minimum_surge,
+            minimum_close_position=settings.minimum_close_position,
+            pine_minimum_reward_risk=1.0,
+            minimum_reward_risk=settings.minimum_reward_risk,
+            maximum_reward_risk=settings.maximum_reward_risk,
+            swing_length=settings.swing_length,
+        )
+
+    def update_settings(self, raw: dict):
+        value = self.settings_store.update(raw)
+        self.logger.emit("SETTINGS_UPDATED", settings=value.public_dict())
+        return value
+
+    def request_scan(self):
+        if self.scan_in_progress:
+            return False
+        self.scan_wakeup.set()
+        return True
 
     def _run_scan(self):
         with self.meta_lock:
@@ -242,16 +208,26 @@ class CloudDemoEngine:
                 return
             with self.state_lock:
                 state = load_state(self.cfg.state_file)
-                place_signal(sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger)
-
-        def on_scan_rows(rows):
-            with self.meta_lock:
-                self.latest_scan_rows = rows
+                place_signal(
+                    sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger,
+                    strategy_config.minimum_reward_risk,
+                    strategy_config.maximum_reward_risk,
+                )
 
         try:
-            scan_market(self.market, self.cfg, self.scfg, self.logger, on_signal=on_signal, on_scan_rows=on_scan_rows)
+            settings = self.settings_store.get()
+            strategy_config = self._apply_settings(settings)
+            snapshot = scan_market_detailed(
+                self.market,
+                self.cfg,
+                strategy_config,
+                self.logger,
+                on_signal=on_signal,
+            )
             with self.meta_lock:
+                self.last_scan_snapshot = snapshot
                 self.last_scan_completed = utc_now()
+            self._send_telegram_snapshot(settings, snapshot)
         except Exception as exc:
             with self.meta_lock:
                 self.last_scan_error = str(exc)
@@ -259,6 +235,35 @@ class CloudDemoEngine:
         finally:
             with self.meta_lock:
                 self.scan_in_progress = False
+
+    def _send_telegram_snapshot(self, settings: RuntimeSettings, snapshot: dict):
+        if not settings.telegram_enabled or not settings.telegram_bot_token or not settings.telegram_chat_id:
+            return
+        for signal in snapshot.get("signals", []):
+            signal_key = f"{signal['symbol']}:{signal['signal_close_ms']}"
+            if signal_key in self.telegram_alerted:
+                continue
+            try:
+                import requests
+                message = (
+                    f"VALID NR7 SIGNAL\n{signal['symbol']}\n"
+                    f"Entry: {signal['entry']:.12g}\nTP R2: {signal['tp']:.12g}\n"
+                    f"SL: {signal['sl']:.12g}\nR:R: {signal['rr']:.2f}\n"
+                    f"App volume: {signal['app_volume_surge']:.2f}x\n"
+                    f"168H volume: {signal['indicator_volume_surge']:.2f}x"
+                )
+                response = requests.post(
+                    f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
+                    data={"chat_id": settings.telegram_chat_id, "text": message},
+                    timeout=10,
+                )
+                response.raise_for_status()
+                self.telegram_alerted.add(signal_key)
+                retained = sorted(self.telegram_alerted)[-1000:]
+                self.telegram_alerted = set(retained)
+                self.telegram_alerted_file.write_text(json.dumps(retained), encoding="utf-8")
+            except Exception as exc:
+                self.logger.emit("TELEGRAM_ERROR", error=str(exc), symbol=signal.get("symbol"))
 
     def _monitor_loop(self):
         while not self.stop_event.is_set():
@@ -322,20 +327,10 @@ class CloudDemoEngine:
         stats["unrealized_pnl_usdt"] = unrealized
         stats["total_pnl_usdt"] = stats["realized_pnl_usdt"] + unrealized
         stats["open_risk_usdt"] = open_risk
-        stats["estimated_demo_equity_usdt"] = (
-            min((self.testnet_free_usdt or 0.0) + open_value, self.cfg.demo_equity_cap_usdt)
-            if self.testnet_free_usdt is not None else None
-        )
+        raw_equity = (self.testnet_free_usdt or 0.0) + open_value if self.testnet_free_usdt is not None else None
+        stats["estimated_demo_equity_usdt"] = min(raw_equity, self.cfg.demo_equity_cap_usdt) if raw_equity is not None else None
 
         with self.meta_lock:
-            latest_rows = list(self.latest_scan_rows)
-            scan_counts = {
-                "scanned": len(latest_rows),
-                "filtered": sum(1 for x in latest_rows if x.get("status") == "FILTERED"),
-                "app_confirmed": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED"),
-                "indicator_passed": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED" and x.get("indicator_pass") is True),
-                "indicator_rejected": sum(1 for x in latest_rows if x.get("status") == "CONFIRMED" and x.get("indicator_pass") is False),
-            }
             meta = {
                 "service_running": True,
                 "started_at": self.started_at,
@@ -351,32 +346,29 @@ class CloudDemoEngine:
                 "last_position_sync_error": self.last_position_sync_error,
                 "last_price_refresh": self.last_price_refresh,
                 "testnet_free_usdt": self.testnet_free_usdt,
+                "next_scan_at_ms": self.next_scan_at_ms,
             }
         return {
             "meta": meta,
-            "scan_counts": scan_counts,
             "risk": {
-                "risk_per_trade_pct": self.cfg.risk_per_trade_pct,
-                "max_risk_per_trade_usdt": self.cfg.max_risk_per_trade_usdt,
+                "risk_per_trade_usdt": self.cfg.risk_per_trade_usdt,
                 "max_open_positions": self.cfg.max_open_positions,
-                "max_total_open_risk_pct": self.cfg.max_total_open_risk_pct,
+                "max_trades_per_utc_day": self.cfg.max_trades_per_utc_day,
+                "max_total_open_risk_usdt": self.cfg.max_total_open_risk_usdt,
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
-                "scan_interval_seconds": self.cfg.scan_interval_seconds,
-                "max_confirmed_age_minutes": self.cfg.max_confirmed_age_minutes,
             },
             "stats": stats,
             "open_trades": open_trades,
             "closed_trades": self.db.closed_trades(100),
             "rejected_signals": self.db.signals("REJECTED", 60),
+            "filter_rejections": self.last_scan_snapshot.get("filtered", []),
             "recent_signals": self.db.signals(None, 60),
             "recent_events": self.db.recent_events(60),
-            "settings": self.editable_settings(),
-            "filtered_latest": [x for x in self.latest_scan_rows if x.get("status") == "FILTERED"],
-            "confirmed_latest": [x for x in self.latest_scan_rows if x.get("status") == "CONFIRMED"],
+            "scan": self.last_scan_snapshot,
+            "settings": self.settings_store.get().public_dict(),
         }
-
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = Path(os.getenv("DATA_DIR", str(ROOT / "data"))).resolve()
@@ -387,33 +379,14 @@ cfg.state_file = str(DATA_DIR / "state.json")
 cfg.event_log = str(DATA_DIR / "events.jsonl")
 cfg.signal_log = str(DATA_DIR / "signals.json")
 cfg.kill_switch_file = str(DATA_DIR / "STOP_TRADING")
-SETTINGS_PATH = DATA_DIR / "dashboard_settings.json"
-if SETTINGS_PATH.exists():
-    try:
-        saved_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-        for key in ("max_symbols","scan_workers","max_confirmed_age_minutes","demo_equity_cap_usdt",
-                    "max_risk_per_trade_usdt","max_open_positions","daily_loss_limit_r","max_entry_drift_pct"):
-            if key in saved_settings and hasattr(cfg, key):
-                setattr(cfg, key, saved_settings[key])
-    except Exception as exc:
-        print(json.dumps({"event":"SETTINGS_LOAD_ERROR","error":str(exc)}), flush=True)
 
 db = TradeDatabase(str(DATA_DIR / "trades.sqlite3"))
-engine = CloudDemoEngine(cfg, db)
-if SETTINGS_PATH.exists():
-    try:
-        saved_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-        for key in ("app_minimum_surge","indicator_volume_lookback","indicator_minimum_surge",
-                    "minimum_close_position","swing_length"):
-            if key in saved_settings and hasattr(engine.scfg, key):
-                setattr(engine.scfg, key, saved_settings[key])
-    except Exception:
-        pass
-engine.scfg.pine_minimum_reward_risk = 1.0
-engine.scfg.minimum_reward_risk = 2.0
-engine.scfg.maximum_reward_risk = 4.0
-if not as_bool(os.getenv("AUTO_START_NEW_TRADES"), False):
+settings_store = SettingsStore(str(DATA_DIR / "settings.json"))
+engine = CloudDemoEngine(cfg, db, settings_store)
+if not as_bool(os.getenv("AUTO_START_NEW_TRADES"), True):
     Path(cfg.kill_switch_file).write_text("Safe startup: new entries paused. Use dashboard START.\n", encoding="utf-8")
+else:
+    Path(cfg.kill_switch_file).unlink(missing_ok=True)
 if as_bool(os.getenv("START_ENGINE"), True):
     engine.start()
 
@@ -509,8 +482,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_json(self):
         n = int(self.headers.get("Content-Length", "0") or 0)
-        raw = self.rfile.read(min(n, 65536)).decode("utf-8", errors="replace")
-        return json.loads(raw or "{}")
+        if n <= 0 or n > 131072:
+            raise ValueError("invalid JSON body size")
+        parsed = json.loads(self.rfile.read(n).decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("JSON body must be an object")
+        return parsed
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
@@ -561,14 +538,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stop":
             engine.set_new_entries_enabled(False)
             return self._json(200, {"ok": True, "new_entries_enabled": False})
-        if path == "/api/settings":
+        if path == "/api/config":
             try:
-                out = engine.apply_settings(self._read_json())
-                return self._json(200, {"ok": True, "settings": out})
-            except ValueError as exc:
+                value = engine.update_settings(self._read_json())
+                return self._json(200, {"ok": True, "settings": value.public_dict()})
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 return self._json(400, {"ok": False, "error": str(exc)})
-            except Exception as exc:
-                return self._json(500, {"ok": False, "error": str(exc)})
         return self._send(404, b"Not found", "text/plain; charset=utf-8")
 
 

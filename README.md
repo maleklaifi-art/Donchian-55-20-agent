@@ -6,9 +6,11 @@ A cloud-ready **Binance Spot Testnet-only** autonomous trading agent with a priv
 
 The cloud service runs continuously. Your PC, browser, and home Wi-Fi do not need to stay on after deployment. The cloud server itself must stay online because it needs live Binance market data and Testnet order access.
 
-The agent does not use AI discretion to invent trades. It executes the frozen rule set only.
+The agent does not use AI discretion to invent trades. It scans independently in the cloud and executes the same deterministic rules as the phone's independent local scanner, with Testnet execution added. Neither scanner depends on the other.
 
 ### Frozen entry stack
+
+The universe matches the original phone scanner: Binance 24H-ticker symbols ending in USDT, excluding names containing UP/DOWN/BULL/BEAR, ranked by quote volume and capped by the editable Top N setting.
 
 A BUY is allowed only when **all** of these pass on a completed 1H candle:
 
@@ -22,23 +24,28 @@ A BUY is allowed only when **all** of these pass on a completed 1H candle:
 - Breakout candle volume / average of the prior 168 completed 1H candles is **>= 1.5x**.
 - Breakout candle closes in its upper 25% (`closePosition >= 0.75`).
 - LuxAlgo-compatible Strong High state is active.
-- Nearest confirmed, fixed, still-unrevisited pivot high above the whole breakout candle exists and becomes the single TP.
+- Nearest confirmed, fixed, still-unrevisited pivot high above the whole breakout candle exists as an entry filter only.
+- The single TP is Classic Pivot R2 from the immediately previous completed UTC daily candle, and R2 must be strictly above the entire breakout candle.
 - Stop loss is the exact active NR7 Box Low.
 
 **R:R layer**
 - `Risk = Entry - Box Low`
 - `Reward = TP - Entry`
-- The signal must satisfy **1 < R:R <= 4**.
-- The R:R is checked again at the live entry price and again after the Testnet market fill. If the fill changes R:R outside `(1, 4]`, the demo exposure is flattened.
+- The signal must satisfy inclusive **2 <= R:R <= 4**; exactly 2.00 and 4.00 are accepted.
+- The R:R is checked again at the live entry price and again after the Testnet market fill. If either value is outside `[2, 4]`, the order is rejected or the filled demo exposure is flattened.
+
+The confidence score follows the supplied Pine formula and uses its original `minimumRewardRisk = 1.0` scoring baseline, but eligibility and execution use the inclusive `[2, 4]` gate.
 
 ## Frozen risk management
 
-- Risk per trade: **1%** of the configured demo bankroll.
-- Maximum open positions: **3**.
-- Maximum combined open risk: **3%**.
+- Demo bankroll cap: **$200 USDT**.
+- Maximum risk per trade: **$2 USDT**, sized from the actual entry-to-SL distance.
+- Maximum open positions: **1**.
+- Maximum executed trades per UTC day: **1**.
+- Maximum combined open risk: **$2 USDT**.
 - Daily loss cutoff: **-3R**; new trades stop for the rest of the UTC day.
 - No leverage.
-- Maximum position notional: 33% of the demo bankroll.
+- Maximum position notional: the available amount within the $200 demo cap.
 - Maximum entry drift from signal close: 0.30% by default.
 - Same symbol cannot have a second open position.
 - The same signal cannot be submitted twice.
@@ -52,7 +59,7 @@ The dashboard shows:
 - Binance Spot Testnet readiness.
 - Estimated Testnet equity and free USDT.
 - Open positions and current unrealized P&L.
-- Entry, current price, one TP, exact SL, quantity, R:R and risk.
+- Entry, current price, previous-day Pivot R2 TP, exact SL, quantity, R:R and risk.
 - App-volume surge and indicator-volume surge for every trade.
 - Closed trades with TP/SL outcome, realized R and estimated USDT P&L.
 - Win rate, wins/losses, total R, today's R and P&L.
@@ -84,13 +91,13 @@ Set these environment variables in the cloud provider's dashboard:
 BINANCE_TESTNET_API_KEY=<Spot Testnet key>
 BINANCE_TESTNET_API_SECRET=<Spot Testnet secret>
 DASHBOARD_PASSWORD=<long private password>
-AUTO_START_NEW_TRADES=false
+AUTO_START_NEW_TRADES=true
 DATA_DIR=/data
 PORT=8080
 COOKIE_SECURE=true
 ```
 
-`AUTO_START_NEW_TRADES=false` is intentional. After every fresh deployment/restart, the service comes up safely with new entries paused. Open the dashboard and press **START NEW TRADES** after checking that Testnet execution says READY.
+`AUTO_START_NEW_TRADES=true` makes Testnet entries automatic after deployment. The dashboard still provides **STOP NEW TRADES** as a kill switch. This package has no production execution URL.
 
 Use `/healthz` as the cloud provider health-check path.
 
@@ -100,8 +107,8 @@ After the one-time deployment:
 
 1. Open the cloud dashboard URL.
 2. Log in with `DASHBOARD_PASSWORD`.
-3. Press **START NEW TRADES**.
-4. Close the browser if you want. The cloud agent continues working.
+3. Confirm that Testnet execution says **READY**. New demo entries start automatically when `AUTO_START_NEW_TRADES=true`.
+4. Close the browser if you want. The cloud agent continues scanning at every `HH:00:10 UTC` and can execute at most one demo trade per UTC day.
 
 No PowerShell, terminal, ChatGPT session, or home PC is required for normal operation.
 
@@ -122,7 +129,7 @@ Closed-trade USDT P&L is derived from the entry fill and the filled Testnet prot
 
 - The strategy scans live Binance Spot market data and executes on Binance Spot Testnet. A Testnet market can differ from production; the bot rechecks the actual Testnet fill before keeping a position.
 - Binance Testnet may reset balances/orders periodically.
-- This package was compiled and smoke-tested locally, including dashboard authentication, API status, persistence, and simulated open→close trade history. A real authenticated Testnet order cannot be verified until your own Testnet credentials are present in the deployed environment.
+- This cloud package was Python-compiled and smoke-tested locally, including dashboard authentication and API status. A real authenticated Testnet order cannot be verified until your own Testnet credentials are present in the deployed environment.
 - Do not switch to real funds based only on a small demo sample. Review enough forward demo trades, execution errors, slippage and strategy stability first.
 
 ## Main files

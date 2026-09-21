@@ -48,6 +48,8 @@ class TradeDatabase:
                     rr REAL,
                     box_high REAL,
                     box_low REAL,
+                    classic_pivot REAL,
+                    strong_high_filter REAL,
                     app_volume_surge REAL,
                     indicator_volume_surge REAL,
                     close_position REAL,
@@ -87,6 +89,13 @@ class TradeDatabase:
                 CREATE INDEX IF NOT EXISTS idx_trades_closed ON trades(closed_at DESC);
                 """
             )
+            # Preserve existing deployments: CREATE TABLE IF NOT EXISTS does
+            # not add new signal fields to an already-created database.
+            signal_columns = {row["name"] for row in c.execute("PRAGMA table_info(signals)")}
+            if "classic_pivot" not in signal_columns:
+                c.execute("ALTER TABLE signals ADD COLUMN classic_pivot REAL")
+            if "strong_high_filter" not in signal_columns:
+                c.execute("ALTER TABLE signals ADD COLUMN strong_high_filter REAL")
 
     @staticmethod
     def _now() -> str:
@@ -119,22 +128,24 @@ class TradeDatabase:
                 """
                 INSERT INTO signals(
                     signal_key,symbol,signal_close_ms,close_time_utc,entry,tp,sl,rr,box_high,box_low,
-                    app_volume_surge,indicator_volume_surge,close_position,confidence_score,confidence_level,
+                    classic_pivot,strong_high_filter,app_volume_surge,indicator_volume_surge,close_position,confidence_score,confidence_level,
                     status,reason,created_at,updated_at,payload_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(signal_key) DO UPDATE SET
                     close_time_utc=excluded.close_time_utc, entry=excluded.entry, tp=excluded.tp, sl=excluded.sl,
                     rr=excluded.rr, box_high=excluded.box_high, box_low=excluded.box_low,
+                    classic_pivot=excluded.classic_pivot, strong_high_filter=excluded.strong_high_filter,
                     app_volume_surge=excluded.app_volume_surge,
                     indicator_volume_surge=excluded.indicator_volume_surge,
                     close_position=excluded.close_position, confidence_score=excluded.confidence_score,
-                    confidence_level=excluded.confidence_level, status='VALID', reason=NULL,
-                    updated_at=excluded.updated_at, payload_json=excluded.payload_json
+                    confidence_level=excluded.confidence_level, updated_at=excluded.updated_at,
+                    payload_json=excluded.payload_json
                 """,
                 (
                     sk, symbol, close_ms, payload.get("close_time_utc"), self._f(payload.get("entry")),
                     self._f(payload.get("tp")), self._f(payload.get("sl")), self._f(payload.get("rr")),
                     self._f(payload.get("box_high")), self._f(payload.get("box_low")),
+                    self._f(payload.get("classic_pivot")), self._f(payload.get("strong_high_filter")),
                     self._f(payload.get("app_volume_surge")), self._f(payload.get("indicator_volume_surge")),
                     self._f(payload.get("close_position")), payload.get("confidence_score"),
                     payload.get("confidence_level"), "VALID", None, now, now,
@@ -224,7 +235,7 @@ class TradeDatabase:
         with self._connect() as c:
             rows = c.execute(
                 """
-                SELECT t.*, s.app_volume_surge,s.indicator_volume_surge,s.close_position,s.confidence_score,s.confidence_level,
+                SELECT t.*, s.classic_pivot,s.strong_high_filter,s.app_volume_surge,s.indicator_volume_surge,s.close_position,s.confidence_score,s.confidence_level,
                        s.entry AS signal_entry
                 FROM trades t LEFT JOIN signals s ON s.signal_key=t.signal_key
                 WHERE t.status='OPEN' ORDER BY t.opened_at DESC
@@ -236,7 +247,7 @@ class TradeDatabase:
         with self._connect() as c:
             rows = c.execute(
                 """
-                SELECT t.*, s.app_volume_surge,s.indicator_volume_surge,s.close_position,s.confidence_score,s.confidence_level
+                SELECT t.*, s.classic_pivot,s.strong_high_filter,s.app_volume_surge,s.indicator_volume_surge,s.close_position,s.confidence_score,s.confidence_level
                 FROM trades t LEFT JOIN signals s ON s.signal_key=t.signal_key
                 WHERE t.status='CLOSED' ORDER BY t.closed_at DESC LIMIT ?
                 """, (int(limit),)

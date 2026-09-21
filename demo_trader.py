@@ -8,7 +8,6 @@ import json
 import math
 import os
 import tempfile
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
@@ -20,7 +19,16 @@ from urllib.parse import urlencode
 
 import requests
 
-from strategy import Candle, Signal, StrategyConfig, app_scan_trace, evaluate_latest
+from strategy import (
+    Candle,
+    Evaluation,
+    Signal,
+    StrategyConfig,
+    evaluate_latest,
+    evaluate_latest_detailed,
+    latest_nr7_box_from_daily,
+    reward_risk_is_accepted,
+)
 
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
@@ -29,17 +37,15 @@ TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
 @dataclass
 class BotConfig:
     max_symbols: int = 1000
-    scan_workers: int = 50
-    scan_interval_seconds: int = 3600
-    max_confirmed_age_minutes: int = 50
+    scan_workers: int = 8
     hourly_history_bars: int = 1000
     quote_asset: str = "USDT"
 
-    # Frozen risk defaults requested for demo validation.
-    risk_per_trade_pct: float = 1.0
-    max_risk_per_trade_usdt: float = 2.0
+    # Frozen demo limits requested by the user.
+    risk_per_trade_usdt: float = 2.0
     max_open_positions: int = 1
-    max_total_open_risk_pct: float = 1.0
+    max_trades_per_utc_day: int = 1
+    max_total_open_risk_usdt: float = 2.0
     daily_loss_limit_r: float = 3.0
     max_position_notional_pct: float = 100.0
     max_entry_drift_pct: float = 0.30
@@ -105,20 +111,14 @@ class PublicMarketClient:
     def __init__(self, timeout_s: int):
         self.base = PRODUCTION_MARKET_BASE
         self.timeout_s = timeout_s
-        self._local = threading.local()
-
-    def _session(self):
-        if not hasattr(self._local, "session"):
-            s = requests.Session()
-            s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
-            self._local.session = s
-        return self._local.session
+        self.s = requests.Session()
+        self.s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
 
     def get(self, path: str, params: Optional[dict] = None):
         last_error = None
         for attempt in range(5):
             try:
-                r = self._session().get(self.base + path, params=params, timeout=self.timeout_s)
+                r = self.s.get(self.base + path, params=params, timeout=self.timeout_s)
                 if r.status_code in (418, 429):
                     retry_after = float(r.headers.get("Retry-After", "2"))
                     time.sleep(max(1.0, retry_after) * (attempt + 1))
@@ -130,28 +130,24 @@ class PublicMarketClient:
                 time.sleep(0.6 * (attempt + 1))
         raise RuntimeError(f"public request failed {path}: {last_error}")
 
-    def ranked_coins(self, quote_asset: str, max_symbols: int) -> List[Tuple[str, float]]:
-        """Exact app universe/ranking from anter-pre-final: 24h ticker, *USDT, exclude token-name markers."""
+    def symbols(self, quote_asset: str, max_symbols: int) -> List[str]:
         tickers = self.get("/api/v3/ticker/24hr")
-        coins: List[Tuple[str, float, float]] = []
         suffix = quote_asset.upper()
-        for x in tickers:
-            symbol = str(x.get("symbol", ""))
-            if not symbol.endswith(suffix):
-                continue
-            if any(marker in symbol for marker in ("UP", "DOWN", "BULL", "BEAR")):
+        blocked = ("UP", "DOWN", "BULL", "BEAR")
+        candidates = []
+        for item in tickers:
+            symbol = str(item.get("symbol", ""))
+            if not symbol.endswith(suffix) or any(word in symbol for word in blocked):
                 continue
             try:
-                price = float(x.get("lastPrice", 0) or 0)
-                qv = float(x.get("quoteVolume", 0) or 0)
+                candidates.append((symbol, float(item.get("quoteVolume", 0) or 0)))
             except (TypeError, ValueError):
                 continue
-            coins.append((symbol, price, qv))
-        coins.sort(key=lambda row: row[2], reverse=True)
-        return [(s, p) for (s, p, _) in coins[:max_symbols]]
+        candidates.sort(key=lambda row: row[1], reverse=True)
+        return [symbol for symbol, _ in candidates[:max_symbols]]
 
-    @staticmethod
-    def _rows_to_candles(rows) -> List[Candle]:
+    def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
+        rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
         return [
             Candle(
                 open_time=int(r[0]), open=float(r[1]), high=float(r[2]), low=float(r[3]),
@@ -159,54 +155,6 @@ class PublicMarketClient:
             )
             for r in rows
         ]
-
-    def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
-        rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
-        return self._rows_to_candles(rows)
-
-    def all_klines(self, symbol: str, interval: str, max_bars: int = 100000) -> List[Candle]:
-        """Load available Binance history backwards for exact stateful Pine reconstruction.
-
-        This is intentionally used only after the lightweight app stage confirms a
-        candidate, so the Top-1000 hourly scan does not make thousands of extra requests.
-        """
-        chunks = []
-        end_time = None
-        total = 0
-
-        while total < max_bars:
-            params = {"symbol": symbol, "interval": interval, "limit": 1000}
-            if end_time is not None:
-                params["endTime"] = end_time
-
-            rows = self.get("/api/v3/klines", params)
-            if not rows:
-                break
-
-            chunks.append(rows)
-            total += len(rows)
-
-            first_open = int(rows[0][0])
-            if len(rows) < 1000 or first_open <= 0:
-                break
-
-            next_end = first_open - 1
-            if end_time is not None and next_end >= end_time:
-                break
-            end_time = next_end
-
-        merged = []
-        seen = set()
-        for rows in reversed(chunks):
-            for r in rows:
-                ot = int(r[0])
-                if ot not in seen:
-                    seen.add(ot)
-                    merged.append(r)
-        merged.sort(key=lambda r: int(r[0]))
-        if len(merged) > max_bars:
-            merged = merged[-max_bars:]
-        return self._rows_to_candles(merged)
 
     def best_ask(self, symbol: str) -> float:
         x = self.get("/api/v3/ticker/bookTicker", {"symbol": symbol})
@@ -411,7 +359,7 @@ def load_config(path: str) -> BotConfig:
 
 
 def initial_state() -> dict:
-    return {"seen_signals": [], "open_positions": {}, "realized": []}
+    return {"seen_signals": [], "executed_entries": [], "open_positions": {}, "realized": []}
 
 
 def load_state(path: str) -> dict:
@@ -421,6 +369,7 @@ def load_state(path: str) -> dict:
     try:
         st = json.loads(p.read_text(encoding="utf-8"))
         st.setdefault("seen_signals", [])
+        st.setdefault("executed_entries", [])
         st.setdefault("open_positions", {})
         st.setdefault("realized", [])
         return st
@@ -452,6 +401,35 @@ def daily_realized_r(state: dict) -> float:
     return sum(float(x.get("r", 0.0)) for x in state.get("realized", []) if x.get("day") == day)
 
 
+def trades_opened_today(state: dict) -> int:
+    day = today_utc()
+    executed = state.get("executed_entries", [])
+    if executed:
+        # This ledger is written immediately after any filled market entry, so
+        # an emergency-flattened entry still consumes the one-trade daily cap.
+        return len({
+            str(row.get("signal_key", ""))
+            for row in executed
+            if str(row.get("opened_at", ""))[:10] == day and row.get("signal_key")
+        })
+
+    # Backward compatibility for state files created before the execution
+    # ledger existed. Avoid double-counting a trade as both open and realized.
+    keys = set()
+    opened = 0
+    for pos in state.get("open_positions", {}).values():
+        if str(pos.get("opened_at", ""))[:10] == day:
+            key = str(pos.get("signal_key", ""))
+            keys.add(key or f"open:{opened}")
+            opened += 1
+    for trade in state.get("realized", []):
+        if str(trade.get("opened_at", ""))[:10] == day:
+            key = str(trade.get("signal_key", ""))
+            keys.add(key or f"realized:{opened}")
+            opened += 1
+    return len(keys)
+
+
 def signal_key(sig: Signal) -> str:
     return f"{sig.symbol}:{sig.signal_close_ms}"
 
@@ -468,74 +446,46 @@ def account_free(account: dict, asset: str) -> float:
     return 0.0
 
 
-def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None, on_scan_rows=None) -> List[Signal]:
-    """Fast exact app scan; deep Pine reconstruction only for confirmed candidates."""
-    coins = market.ranked_coins(cfg.quote_asset, cfg.max_symbols)
+def scan_market_detailed(
+    market: PublicMarketClient,
+    cfg: BotConfig,
+    scfg: StrategyConfig,
+    logger: EventLogger,
+    on_signal=None,
+) -> dict:
+    symbols = market.symbols(cfg.quote_asset, cfg.max_symbols)
     now_ms = int(time.time() * 1000)
     signals: List[Signal] = []
-    app_confirmed_count = 0
-    indicator_rejected_count = 0
-    scan_rows: List[Dict[str, Any]] = []
+    phase_one = []
+    filtered = []
+    errors = 0
+    started = time.monotonic()
 
-    def one(sym: str, price: float):
-        # Match the phone app's lightweight stage.
-        daily_fast = market.klines(sym, "1d", 20)
-        hourly_fast = market.klines(sym, "1h", 10)
-        trace = app_scan_trace(sym, daily_fast, hourly_fast, price, scfg, now_ms)
-
-        if trace.get("status") != "CONFIRMED":
-            return trace, None, None
-
-        # Only confirmed app candidates pay the cost of full state reconstruction.
-        daily_deep = market.klines(sym, "1d", 1000)
-        hourly_deep = market.all_klines(sym, "1h", 100000)
-        sig, candidate = evaluate_latest(sym, daily_deep, hourly_deep, price, scfg, now_ms)
-        return trace, sig, candidate
+    def one(sym: str):
+        h = market.klines(sym, "1h", cfg.hourly_history_bars)
+        evaluation = evaluate_latest_detailed(sym, h, scfg, now_ms)
+        # Fast path is one 1000-bar hourly request. Only if that window has no
+        # preserved NR7 box do we make a rare daily-history fallback request.
+        if evaluation.rejection_stage == "NR7" and h:
+            daily = market.klines(sym, "1d", 1000)
+            closed_hourly = [c for c in h if c.close_time < now_ms]
+            if closed_hourly:
+                signal_day = closed_hourly[-1].open_time // 86_400_000
+                fallback_box = latest_nr7_box_from_daily(daily, signal_day, now_ms)
+                if fallback_box is not None:
+                    evaluation = evaluate_latest_detailed(sym, h, scfg, now_ms, box_override=fallback_box)
+        return evaluation
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.scan_workers)) as pool:
-        futs = {pool.submit(one, sym, price): sym for sym, price in coins}
+        futs = {pool.submit(one, s): s for s in symbols}
         for fut in as_completed(futs):
             sym = futs[fut]
             try:
-                trace, sig, candidate = fut.result()
-
-                if candidate is not None:
-                    trace["indicator_pass"] = candidate.get("indicator_pass")
-                    trace["rr_gate_pass"] = candidate.get("rr_gate_pass")
-                    trace["indicator_reason"] = None if sig is not None else candidate.get("reason")
-                else:
-                    trace["indicator_pass"] = None
-                    trace["rr_gate_pass"] = None
-                    trace["indicator_reason"] = None
-                scan_rows.append(trace)
-
-                if candidate is not None:
-                    app_confirmed_count += 1
-                    sk = f"{candidate['symbol']}:{candidate['signal_close_ms']}"
-                    candidate["signal_key"] = sk
-                    logger.emit("APP_CONFIRMED", **candidate)
-
-                    if sig is None:
-                        indicator_rejected_count += 1
-                        logger.emit(
-                            "TRADE_REJECTED",
-                            symbol=candidate["symbol"],
-                            signal_key=sk,
-                            reason=candidate.get("reason") or "indicator/RR conditions failed",
-                            app_volume_surge=candidate.get("app_volume_surge"),
-                            indicator_volume_surge=candidate.get("indicator_volume_surge"),
-                            close_position=candidate.get("close_position"),
-                            rr=candidate.get("rr"),
-                            entry=candidate.get("entry"),
-                            tp=candidate.get("tp"),
-                            sl=candidate.get("sl"),
-                            box_high=candidate.get("box_high"),
-                            box_low=candidate.get("box_low"),
-                            close_time_utc=candidate.get("close_time_utc"),
-                        )
-                        continue
-
-                if sig is not None:
+                evaluation: Evaluation = fut.result()
+                if evaluation.phase_one:
+                    phase_one.append(evaluation.phase_one.to_dict())
+                if evaluation.signal:
+                    sig = evaluation.signal
                     signals.append(sig)
                     logger.emit("VALID_SIGNAL", **sig.to_dict())
                     if on_signal is not None:
@@ -543,34 +493,51 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
                             on_signal(sig)
                         except Exception as callback_exc:
                             logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
+                else:
+                    filtered.append(evaluation.filtered_dict())
             except Exception as exc:
-                scan_rows.append({
-                    "symbol":sym,"price":None,"category":"Error","reason":str(exc),
-                    "status":"FILTERED","app_volume_surge":None,"box_high":None,"box_low":None
+                errors += 1
+                filtered.append({
+                    "symbol": sym,
+                    "price": 0.0,
+                    "stage": "Data",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "phase_one_passed": False,
                 })
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
-
-    scan_rows.sort(key=lambda x: x.get("symbol",""))
-    if on_scan_rows is not None:
-        try:
-            on_scan_rows(scan_rows)
-        except Exception as exc:
-            logger.emit("SCAN_ROWS_CALLBACK_ERROR", error=str(exc))
-
     signals.sort(key=lambda x: x.signal_close_ms)
+    phase_one.sort(key=lambda x: x["symbol"])
+    filtered.sort(key=lambda x: x["symbol"])
     Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in signals], indent=2), encoding="utf-8")
-    filtered_count = sum(1 for x in scan_rows if x.get("status") == "FILTERED")
-    confirmed_count = sum(1 for x in scan_rows if x.get("status") == "CONFIRMED")
+    duration = time.monotonic() - started
+    snapshot = {
+        "started_at_ms": now_ms,
+        "completed_at_ms": int(time.time() * 1000),
+        "duration_seconds": round(duration, 3),
+        "symbols": symbols,
+        "coins_scanned": len(symbols),
+        "app_confirmed_count": len(phase_one),
+        "valid_count": len(signals),
+        "indicator_rejected_count": max(0, len(phase_one) - len(signals)),
+        "error_count": errors,
+        "phase_one": phase_one,
+        "signals": [x.to_dict() for x in signals],
+        "filtered": filtered,
+    }
     logger.emit(
         "SCAN_COMPLETE",
-        symbols=len(coins),
-        filtered=filtered_count,
-        confirmed=confirmed_count,
-        app_confirmed=app_confirmed_count,
-        indicator_rejected=indicator_rejected_count,
+        symbols=len(symbols),
+        app_confirmed=len(phase_one),
         valid_signals=len(signals),
+        rejected=len(filtered),
+        errors=errors,
+        duration_seconds=round(duration, 3),
     )
-    return signals
+    return snapshot
+
+
+def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None) -> List[Signal]:
+    return [Signal(**row) for row in scan_market_detailed(market, cfg, scfg, logger, on_signal)["signals"]]
 
 
 def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: EventLogger, cfg: BotConfig):
@@ -632,6 +599,15 @@ def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
     if len(state.get("open_positions", {})) >= cfg.max_open_positions:
         logger.emit("NEW_ENTRIES_BLOCKED", reason="max open positions", count=len(state["open_positions"]))
         return False
+    opened_today = trades_opened_today(state)
+    if opened_today >= cfg.max_trades_per_utc_day:
+        logger.emit(
+            "NEW_ENTRIES_BLOCKED",
+            reason="max trades per UTC day",
+            count=opened_today,
+            limit=cfg.max_trades_per_utc_day,
+        )
+        return False
     dr = daily_realized_r(state)
     if dr <= -abs(cfg.daily_loss_limit_r):
         logger.emit("NEW_ENTRIES_BLOCKED", reason="daily loss limit", daily_r=dr)
@@ -647,6 +623,8 @@ def place_signal(
     state: dict,
     cfg: BotConfig,
     logger: EventLogger,
+    minimum_reward_risk: float = 2.0,
+    maximum_reward_risk: float = 4.0,
 ):
     key = signal_key(sig)
     if key in set(state.get("seen_signals", [])):
@@ -696,18 +674,18 @@ def place_signal(
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="live price outside SL/TP interval", live_ask=live_ask, signal_key=key)
         return
     execution_rr = (sig.tp - live_ask) / (live_ask - sig.sl)
-    if not (execution_rr > 2.0 and execution_rr < 4.0):
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="execution-time RR outside (2,4)", execution_rr=execution_rr, signal_key=key)
+    if not reward_risk_is_accepted(execution_rr, minimum_reward_risk, maximum_reward_risk):
+        logger.emit(
+            "TRADE_REJECTED", symbol=sig.symbol,
+            reason=f"execution-time RR outside [{minimum_reward_risk:g},{maximum_reward_risk:g}]",
+            execution_rr=execution_rr, signal_key=key,
+        )
         return
 
     open_risk = sum(float(p.get("risk_usdt", 0)) for p in state.get("open_positions", {}).values())
-    max_total_risk = equity * cfg.max_total_open_risk_pct / 100.0
+    max_total_risk = cfg.max_total_open_risk_usdt
     available_risk = max(0.0, max_total_risk - open_risk)
-    risk_budget = min(
-        equity * cfg.risk_per_trade_pct / 100.0,
-        cfg.max_risk_per_trade_usdt,
-        available_risk,
-    )
+    risk_budget = min(cfg.risk_per_trade_usdt, available_risk, equity)
     if risk_budget <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="combined open-risk limit", signal_key=key)
         return
@@ -742,6 +720,33 @@ def place_signal(
         logger.emit("ENTRY_FAILED", symbol=sig.symbol, response=entry, signal_key=key)
         return
     avg_fill = cumulative_quote / executed_qty if cumulative_quote > 0 else live_ask
+    state.setdefault("executed_entries", []).append({
+        "signal_key": key,
+        "symbol": sig.symbol,
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "entry_order_id": int(entry.get("orderId", 0) or 0),
+    })
+    state["executed_entries"] = state["executed_entries"][-1000:]
+    try:
+        save_state(cfg.state_file, state)
+    except Exception as state_exc:
+        # Protection takes priority after a fill. Continue immediately to the
+        # OCO/flatten path even if the accounting ledger could not be written.
+        # Also attempt to pause later entries because the daily ledger is no
+        # longer trustworthy.
+        try:
+            kill = Path(cfg.kill_switch_file)
+            kill.parent.mkdir(parents=True, exist_ok=True)
+            kill.write_text("Paused: state save failed after a filled entry.\n", encoding="utf-8")
+        except Exception:
+            pass
+        print(json.dumps({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "event": "STATE_SAVE_ERROR_AFTER_FILL",
+            "symbol": sig.symbol,
+            "signal_key": key,
+            "error": str(state_exc),
+        }), flush=True)
 
     commission_base = 0.0
     for fill in entry.get("fills", []) or []:
@@ -760,13 +765,28 @@ def place_signal(
         logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="protective quantity invalid", signal_key=key)
         return
 
-    # Re-check RR using actual fill. The strategy signal still had to pass the original 1<RR<=4 filter.
+    # Re-check the same inclusive mobile-parity R:R gate using the actual fill.
     actual_risk = avg_fill - float(sl_tick)
     actual_reward = float(tp_tick) - avg_fill
     actual_rr = actual_reward / actual_risk if actual_risk > 0 else -1
-    if not (actual_rr > 1.0 and actual_rr <= 4.0):
+    actual_position_risk = float(protect_qty) * actual_risk
+    if actual_position_risk > cfg.risk_per_trade_usdt + 1e-9 or actual_position_risk > risk_budget + 1e-9:
         exec_client.market_sell_qty(sig.symbol, fmt_dec(protect_qty), deterministic_id("nr7x", key))
-        logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="fill changed RR outside (1,4]", actual_rr=actual_rr, signal_key=key)
+        logger.emit(
+            "EMERGENCY_FLATTEN", symbol=sig.symbol,
+            reason="fill risk exceeded absolute demo limit",
+            actual_risk_usdt=actual_position_risk,
+            risk_limit_usdt=min(cfg.risk_per_trade_usdt, risk_budget),
+            signal_key=key,
+        )
+        return
+    if not reward_risk_is_accepted(actual_rr, minimum_reward_risk, maximum_reward_risk):
+        exec_client.market_sell_qty(sig.symbol, fmt_dec(protect_qty), deterministic_id("nr7x", key))
+        logger.emit(
+            "EMERGENCY_FLATTEN", symbol=sig.symbol,
+            reason=f"fill changed RR outside [{minimum_reward_risk:g},{maximum_reward_risk:g}]",
+            actual_rr=actual_rr, signal_key=key,
+        )
         return
 
     list_cid = deterministic_id("nr7o", key)
@@ -817,7 +837,7 @@ def place_signal(
         tp=float(tp_tick),
         sl=float(sl_tick),
         rr=actual_rr,
-        risk_usdt=float(protect_qty) * actual_risk,
+        risk_usdt=actual_position_risk,
         opened_at=datetime.now(timezone.utc).isoformat(),
         oco_order_list_id=int(oco["orderListId"]),
         oco_list_client_order_id=list_cid,
@@ -836,7 +856,8 @@ def run_once(cfg: BotConfig, execute_demo: bool):
         indicator_volume_lookback=168,
         indicator_minimum_surge=1.5,
         minimum_close_position=0.75,
-        minimum_reward_risk=1.0,
+        pine_minimum_reward_risk=1.0,
+        minimum_reward_risk=2.0,
         maximum_reward_risk=4.0,
         swing_length=50,
     )
@@ -861,7 +882,10 @@ def run_once(cfg: BotConfig, execute_demo: bool):
         return
 
     for sig in signals:
-        place_signal(sig, market, exec_client, rules, state, cfg, logger)
+        place_signal(
+            sig, market, exec_client, rules, state, cfg, logger,
+            scfg.minimum_reward_risk, scfg.maximum_reward_risk,
+        )
 
 
 def sleep_to_next_hour():

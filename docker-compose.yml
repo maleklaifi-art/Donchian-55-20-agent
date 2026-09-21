@@ -8,7 +8,7 @@ services:
       BINANCE_TESTNET_API_KEY: "${BINANCE_TESTNET_API_KEY}"
       BINANCE_TESTNET_API_SECRET: "${BINANCE_TESTNET_API_SECRET}"
       DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD}"
-      AUTO_START_NEW_TRADES: "false"
+      AUTO_START_NEW_TRADES: "true"
       DATA_DIR: "/data"
     volumes:
       - nr7_demo_data:/data
