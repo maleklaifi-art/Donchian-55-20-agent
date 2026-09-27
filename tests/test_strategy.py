@@ -56,10 +56,12 @@ def test_display_categories_are_filtered_confirmed_and_passed(tmp_path):
         def klines(self, symbol, interval, limit):
             return []
 
-    confirmed = PhaseOneSignal("CONFIRMEDUSDT", 1, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.1)
-    passed_phase = PhaseOneSignal("PASSEDUSDT", 2, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.2)
+    clock = strategy.datetime(2026, 9, 21, 1, tzinfo=strategy.timezone.utc).timestamp()
+    close_ms = int(clock * 1000) - 1
+    confirmed = PhaseOneSignal("CONFIRMEDUSDT", close_ms, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.1)
+    passed_phase = PhaseOneSignal("PASSEDUSDT", close_ms, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.2)
     passed_signal = Signal(
-        "PASSEDUSDT", 2, "2026-09-21T00:59:59.999Z", 10, 12, 9, 11,
+        "PASSEDUSDT", close_ms, "2026-09-21T00:59:59.999Z", 10, 12, 9, 11,
         13, 2, 9.5, 9, 2.2, 1.8, 0.8, 75, "MEDIUM",
     )
     results = {
@@ -72,7 +74,7 @@ def test_display_categories_are_filtered_confirmed_and_passed(tmp_path):
         return results[symbol]
 
     cfg = BotConfig(scan_workers=1, signal_log=str(tmp_path / "signals.json"), event_log=str(tmp_path / "events.jsonl"))
-    with patch("demo_trader.evaluate_latest_detailed", side_effect=evaluate):
+    with patch("demo_trader.evaluate_latest_detailed", side_effect=evaluate), patch("demo_trader.time.time", return_value=clock):
         snapshot = scan_market_detailed(FakeMarket(), cfg, StrategyConfig(), EventLogger(cfg.event_log))
 
     assert snapshot["coins_scanned"] == 3

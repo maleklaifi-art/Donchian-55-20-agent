@@ -1,0 +1,21 @@
+name: Live data regression checks
+on:
+  push:
+    branches:
+      - fix/live-signal-freshness-20260927
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install test dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r requirements.txt pytest==8.3.5
+      - name: Run regression tests without live exchange access
+        run: .venv/bin/python -m pytest -q

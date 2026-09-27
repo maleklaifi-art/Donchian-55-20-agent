@@ -102,6 +102,11 @@ class Evaluation:
         return row
 
 
+def is_current_signal_close(close_ms: int, now_ms: int) -> bool:
+    """Only the immediately preceding UTC hour can produce a live signal."""
+    return close_ms == (now_ms // 3_600_000) * 3_600_000 - 1
+
+
 def is_closed(c: Candle, now_ms: int) -> bool:
     return c.close_time < now_ms
 
@@ -328,6 +333,17 @@ def evaluate_latest_detailed(
 
     i = len(hourly) - 1
     c, p = hourly[i], hourly[i - 1]
+
+    if not is_current_signal_close(c.close_time, now_ms):
+        actual = datetime.fromtimestamp(c.close_time / 1000, tz=timezone.utc).isoformat()
+        expected = datetime.fromtimestamp(
+            ((now_ms // 3_600_000) * 3_600_000 - 1) / 1000, tz=timezone.utc
+        ).isoformat()
+        return reject("Data", f"Stale candles: latest close={actual}; expected={expected}")
+    if (c.open_time != c.close_time - 3_600_000 + 1
+            or p.open_time != c.open_time - 3_600_000
+            or p.close_time != c.open_time - 1):
+        return reject("Data", "Missing or malformed consecutive 1H candles")
 
     box = box_override or latest_prior_nr7_box(hourly, i)
     if box is None:

@@ -29,6 +29,7 @@ from demo_trader import (
     sync_positions,
 )
 from runtime_settings import RuntimeSettings, SettingsStore
+from strategy import is_current_signal_close
 
 
 def utc_now():
@@ -246,6 +247,8 @@ class CloudDemoEngine:
         if not settings.telegram_enabled or not settings.telegram_bot_token or not settings.telegram_chat_id:
             return
         for signal in snapshot.get("signals", []):
+            if not is_current_signal_close(signal["signal_close_ms"], int(time.time() * 1000)):
+                continue
             signal_key = f"{signal['symbol']}:{signal['signal_close_ms']}"
             if signal_key in self.telegram_alerted:
                 continue

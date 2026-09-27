@@ -27,6 +27,7 @@ from strategy import (
     StrategyConfig,
     evaluate_latest,
     evaluate_latest_detailed,
+    is_current_signal_close,
     latest_nr7_box_from_daily,
     reward_risk_is_accepted,
 )
@@ -136,12 +137,22 @@ class PublicMarketClient:
         raise RuntimeError(f"public request failed {path}: {last_error}")
 
     def symbols(self, quote_asset: str, max_symbols: int) -> List[str]:
+        # Refresh each scan. Never fall back to ticker-only selection if this fails.
+        info = self.get("/api/v3/exchangeInfo")
+        eligible = {
+            item["symbol"] for item in info["symbols"]
+            if item.get("status") == "TRADING"
+            and item.get("isSpotTradingAllowed") is True
+            and item.get("quoteAsset") == quote_asset.upper()
+        }
         tickers = self.get("/api/v3/ticker/24hr")
         suffix = quote_asset.upper()
         blocked = ("UP", "DOWN", "BULL", "BEAR")
         candidates = []
         for item in tickers:
             symbol = str(item.get("symbol", ""))
+            if symbol not in eligible:
+                continue
             if not symbol.endswith(suffix) or any(word in symbol for word in blocked):
                 continue
             try:
@@ -488,6 +499,13 @@ def scan_market_detailed(
             sym = futs[fut]
             try:
                 evaluation: Evaluation = fut.result()
+                if evaluation.phase_one and not is_current_signal_close(
+                    evaluation.phase_one.signal_close_ms, int(time.time() * 1000)
+                ):
+                    evaluation = Evaluation(
+                        sym, evaluation.price, rejection_stage="Data",
+                        rejection_reason="Stale candles: scan crossed the next UTC hour",
+                    )
                 if evaluation.phase_one:
                     candidate = evaluation.phase_one.to_dict()
                     candidate["status"] = "PASSED" if evaluation.signal else "INDICATOR_NOT_PASSED"
@@ -643,6 +661,9 @@ def place_signal(
     maximum_reward_risk: float = 4.0,
 ):
     key = signal_key(sig)
+    if not is_current_signal_close(sig.signal_close_ms, int(time.time() * 1000)):
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale signal candle")
+        return
     if key in set(state.get("seen_signals", [])):
         return
     # Mark first so process restart can never double-submit the same signal.
