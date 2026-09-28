@@ -200,17 +200,17 @@ def test_settings_are_persisted_and_validate_rr_order(tmp_path):
         pass
 
 
-def test_one_trade_per_utc_day_gate(tmp_path):
+def test_previous_trade_does_not_block_another_entry(tmp_path):
     cfg = BotConfig(kill_switch_file=str(tmp_path / "STOP"))
     logger = EventLogger(str(tmp_path / "events.jsonl"))
     state = {
         "open_positions": {},
         "realized": [{"opened_at": strategy.datetime.now(strategy.timezone.utc).isoformat(), "r": 2.0}],
     }
-    assert not allowed_to_trade(state, cfg, logger)
+    assert allowed_to_trade(state, cfg, logger)
 
 
-def test_filled_emergency_entry_still_consumes_daily_trade_cap(tmp_path):
+def test_execution_ledger_does_not_impose_daily_trade_count_cap(tmp_path):
     cfg = BotConfig(kill_switch_file=str(tmp_path / "STOP"))
     logger = EventLogger(str(tmp_path / "events.jsonl"))
     state = {
@@ -221,7 +221,7 @@ def test_filled_emergency_entry_still_consumes_daily_trade_cap(tmp_path):
         "open_positions": {},
         "realized": [],
     }
-    assert not allowed_to_trade(state, cfg, logger)
+    assert allowed_to_trade(state, cfg, logger)
 
 
 def test_current_binance_oco_request_shape():

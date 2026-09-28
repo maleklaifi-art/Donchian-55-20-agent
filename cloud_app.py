@@ -360,10 +360,10 @@ class CloudDemoEngine:
         return {
             "meta": meta,
             "risk": {
-                "risk_per_trade_usdt": self.cfg.risk_per_trade_usdt,
-                "max_open_positions": self.cfg.max_open_positions,
-                "max_trades_per_utc_day": self.cfg.max_trades_per_utc_day,
-                "max_total_open_risk_usdt": self.cfg.max_total_open_risk_usdt,
+                "risk_per_trade_usdt": min(2.0, self.cfg.risk_per_trade_usdt),
+                "max_open_positions": None,
+                "max_trades_per_utc_day": None,
+                "max_total_open_risk_usdt": None,
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,

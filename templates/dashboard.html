@@ -177,7 +177,7 @@
       ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.valid_count} passed · ${d.scan.app_confirmed_count} confirmed · ${d.scan.filtered.length} filtered · ${d.scan.error_count} errors · ${num(d.scan.duration_seconds,2)}s`],
       ['Schedule','Every hour at H:00 UTC'],
       ['Strategy',`App + Pivot-R2 Pine + ${num(d.settings.minimum_reward_risk,2)} ≤ R:R ≤ ${num(d.settings.maximum_reward_risk,2)}`],
-      ['Risk',`${num(r.risk_per_trade_usdt,2)} USDT/trade · max ${r.max_open_positions} position · max ${r.max_trades_per_utc_day} trade/day`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
+      ['Risk',`Max ${num(r.risk_per_trade_usdt,2)} USDT risk/trade · positions limited by available balance · no daily trade-count cap`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
     ];
     $('engineBody').innerHTML=items.map(x=>`<tr><th style="width:180px">${x[0]}</th><td>${x[1]}</td></tr>`).join('');
     $('scanMeta').textContent=m.scan_in_progress?'Scanning market now…':`Last scan: ${date(m.last_scan_completed)}`;
@@ -193,11 +193,11 @@
     $('stopBtn').disabled=!m.new_entries_enabled;
     $('equity').textContent=s.estimated_demo_equity_usdt==null?'—':`${num(s.estimated_demo_equity_usdt,2)} USDT`;
     $('freeUsdt').textContent=`Free Testnet USDT: ${m.testnet_free_usdt==null?'—':num(m.testnet_free_usdt,2)} · risk cap ${num(r.demo_equity_cap_usdt,0)}`;
-    setMoney('openPnl',s.unrealized_pnl_usdt); $('openCount').textContent=`${s.open_count} / ${r.max_open_positions} positions`;
+    setMoney('openPnl',s.unrealized_pnl_usdt); $('openCount').textContent=`${s.open_count} open positions`;
     setMoney('realizedPnl',s.realized_pnl_usdt); $('realizedR').textContent=`${num(s.realized_r,2)}R total`;
     setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
-    $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`${num(r.risk_per_trade_usdt,2)} USDT/trade · ${num(r.max_total_open_risk_usdt,2)} USDT max`;
+    $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`Max ${num(r.risk_per_trade_usdt,2)} USDT risk per trade`;
     renderOpen(d.open_trades); renderClosed(d.closed_trades); renderPassed(d.passed_signals); renderConfirmed(d.confirmed_signals); renderFiltered(d.filtered_signals); renderEngine(d); renderSettings(d.settings);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');

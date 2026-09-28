@@ -5,9 +5,6 @@
   "quote_asset": "USDT",
 
   "risk_per_trade_usdt": 2.0,
-  "max_open_positions": 1,
-  "max_trades_per_utc_day": 1,
-  "max_total_open_risk_usdt": 2.0,
   "daily_loss_limit_r": 3.0,
   "max_position_notional_pct": 100.0,
   "max_entry_drift_pct": 0.30,

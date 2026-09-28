@@ -16,7 +16,7 @@ Use this once when deploying the demo agent.
 - [ ] Deploy and open the public HTTPS dashboard URL.
 - [ ] Confirm **Execution: READY**.
 - [ ] Confirm **New entries: ENABLED** after startup when `AUTO_START_NEW_TRADES=true`.
-- [ ] Review risk settings: $200 cap, $2 maximum risk, one position, one trade per UTC day.
+- [ ] Review risk settings: $200 bankroll cap, $2 maximum planned risk per trade, multiple positions funded by available balance.
 - [ ] Confirm the dashboard reports Testnet **READY**; use **STOP NEW TRADES** whenever you want to pause entries.
 - [ ] Leave it on demo until the forward-test sample is large enough to evaluate.
 

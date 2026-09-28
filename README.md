@@ -38,13 +38,12 @@ A BUY is allowed only when **all** of these pass on a completed 1H candle:
 
 The confidence score follows the supplied Pine formula and uses its original `minimumRewardRisk = 1.0` scoring baseline, but eligibility and execution use the inclusive `[2, 4]` gate.
 
-## Frozen risk management
+## Risk management
 
 - Demo bankroll cap: **$200 USDT**.
 - Maximum risk per trade: **$2 USDT**, sized from the actual entry-to-SL distance.
-- Maximum open positions: **1**.
-- Maximum executed trades per UTC day: **1**.
-- Maximum combined open risk: **$2 USDT**.
+- Multiple positions and trades per day are allowed when available demo balance can fund them.
+- The $2 risk cap applies separately to each position; combined open risk may exceed $2.
 - Daily loss cutoff: **-3R**; new trades stop for the rest of the UTC day.
 - No leverage.
 - Maximum position notional: the available amount within the $200 demo cap.
@@ -111,7 +110,7 @@ After the one-time deployment:
 1. Open the cloud dashboard URL.
 2. Log in with `DASHBOARD_PASSWORD`.
 3. Confirm that Testnet execution says **READY**. New demo entries start automatically when `AUTO_START_NEW_TRADES=true`.
-4. Close the browser if you want. The cloud agent continues scanning at every exact `HH:00 UTC` boundary and can execute at most one demo trade per UTC day.
+4. Close the browser if you want. The cloud agent continues scanning at every exact `HH:00 UTC` boundary and can execute multiple qualifying demo trades when available balance allows.
 
 ## Dashboard terms
 

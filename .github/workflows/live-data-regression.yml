@@ -2,7 +2,8 @@ name: Live data regression checks
 on:
   push:
     branches:
-      - fix/live-signal-freshness-20260927
+      - fix/per-trade-risk-20260928
+      - main
 permissions:
   contents: read
 jobs:

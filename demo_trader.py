@@ -43,11 +43,8 @@ class BotConfig:
     hourly_history_bars: int = 1000
     quote_asset: str = "USDT"
 
-    # Frozen demo limits requested by the user.
+    # Per-trade risk limit; position count is constrained by available bankroll.
     risk_per_trade_usdt: float = 2.0
-    max_open_positions: int = 1
-    max_trades_per_utc_day: int = 1
-    max_total_open_risk_usdt: float = 2.0
     daily_loss_limit_r: float = 3.0
     max_position_notional_pct: float = 100.0
     max_entry_drift_pct: float = 0.30
@@ -422,7 +419,7 @@ def trades_opened_today(state: dict) -> int:
     executed = state.get("executed_entries", [])
     if executed:
         # This ledger is written immediately after any filled market entry, so
-        # an emergency-flattened entry still consumes the one-trade daily cap.
+        # an emergency-flattened entry remains counted in execution history.
         return len({
             str(row.get("signal_key", ""))
             for row in executed
@@ -630,18 +627,6 @@ def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
     if Path(cfg.kill_switch_file).exists():
         logger.emit("NEW_ENTRIES_BLOCKED", reason="kill switch file exists", file=cfg.kill_switch_file)
         return False
-    if len(state.get("open_positions", {})) >= cfg.max_open_positions:
-        logger.emit("NEW_ENTRIES_BLOCKED", reason="max open positions", count=len(state["open_positions"]))
-        return False
-    opened_today = trades_opened_today(state)
-    if opened_today >= cfg.max_trades_per_utc_day:
-        logger.emit(
-            "NEW_ENTRIES_BLOCKED",
-            reason="max trades per UTC day",
-            count=opened_today,
-            limit=cfg.max_trades_per_utc_day,
-        )
-        return False
     dr = daily_realized_r(state)
     if dr <= -abs(cfg.daily_loss_limit_r):
         logger.emit("NEW_ENTRIES_BLOCKED", reason="daily loss limit", daily_r=dr)
@@ -697,7 +682,8 @@ def place_signal(
     # Keep risk percentages anchored to the configured demo bankroll rather than
     # shrinking them merely because some USDT is currently deployed in open positions.
     equity = min(usdt_free + open_notional, cfg.demo_equity_cap_usdt)
-    if equity <= 0:
+    available_quote = min(usdt_free, max(0.0, cfg.demo_equity_cap_usdt - open_notional))
+    if equity <= 0 or available_quote <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no free demo quote balance", signal_key=key)
         return
 
@@ -719,12 +705,9 @@ def place_signal(
         )
         return
 
-    open_risk = sum(float(p.get("risk_usdt", 0)) for p in state.get("open_positions", {}).values())
-    max_total_risk = cfg.max_total_open_risk_usdt
-    available_risk = max(0.0, max_total_risk - open_risk)
-    risk_budget = min(cfg.risk_per_trade_usdt, available_risk, equity)
+    risk_budget = min(2.0, cfg.risk_per_trade_usdt, equity)
     if risk_budget <= 0:
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="combined open-risk limit", signal_key=key)
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no per-trade risk budget", signal_key=key)
         return
 
     stop_distance = live_ask - sig.sl
@@ -738,10 +721,14 @@ def place_signal(
         return
 
     # Leave a tiny buffer for testnet price movement/fees.
-    quote_notional = min(quote_notional, usdt_free * 0.995)
+    quote_notional = min(quote_notional, available_quote * 0.995)
     quote_dec = floor_step(quote_notional, Decimal("0.00000001"))
     if quote_dec <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="position rounds to zero", signal_key=key)
+        return
+
+    if quote_dec < rule.min_notional:
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="available balance below min notional", signal_key=key)
         return
 
     entry_cid = deterministic_id("nr7e", key)
