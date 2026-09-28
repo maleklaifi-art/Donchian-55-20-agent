@@ -16,7 +16,7 @@
   <div class="top">
     <div class="brand">
       <h1>NR7 Autonomous Demo Agent</h1>
-      <p>Exact App + Pivot-R2 Pine · 2 ≤ R:R ≤ 4 · Binance Spot Testnet</p>
+      <p>Exact App + Pivot-R2 Pine · <span id="strategyRrRange">Loading R:R settings…</span> · Binance Spot Testnet</p>
     </div>
     <div class="controls">
       <span id="botPill" class="pill warn"><span class="dot"></span><span id="botText">Loading…</span></span>
@@ -97,6 +97,7 @@
   const date = v => !v ? '—' : new Date(v).toLocaleString();
   const cls = v => Number(v)>0?'good':Number(v)<0?'bad':'';
   const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const rrRange = settings => `${num(settings?.minimum_reward_risk,2)}≤R:R≤${num(settings?.maximum_reward_risk,2)}`;
 
   function setMoney(id,v){ const el=$(id); el.textContent=money(v); el.className='v '+cls(v); }
   function showError(msg){ const e=$('errorbar'); if(!msg){e.style.display='none';e.textContent='';return} e.style.display='block';e.textContent=msg; }
@@ -113,7 +114,7 @@
         <div><span>Quantity</span><b>${num(t.quantity,8)}</b></div><div><span>Opened</span><b>${date(t.opened_at)}</b></div>
       </div>
       <div class="pnl ${cls(t.unrealized_pnl_usdt)}">${money(t.unrealized_pnl_usdt)} <span style="font-size:12px">(${pct(t.unrealized_pct)})</span></div>
-      <div class="ruleline"><span class="tag pass">APP PASS</span><span class="tag pass">PIVOT-R2 PASS</span><span class="tag pass">2≤R:R≤4</span><span class="tag">Strong filter ${num(t.strong_high_filter,8)}</span><span class="tag">App Vol ${num(t.app_volume_surge,2)}x</span><span class="tag">Ind Vol ${num(t.indicator_volume_surge,2)}x</span></div>
+      <div class="ruleline"><span class="tag pass">APP PASS</span><span class="tag pass">PIVOT-R2 PASS</span><span class="tag pass">${rrRange(state?.settings)}</span><span class="tag">Strong filter ${num(t.strong_high_filter,8)}</span><span class="tag">App Vol ${num(t.app_volume_surge,2)}x</span><span class="tag">Ind Vol ${num(t.indicator_volume_surge,2)}x</span></div>
     </article>`).join('');
   }
 
@@ -186,6 +187,7 @@
 
   function render(d){
     state=d; const m=d.meta,s=d.stats,r=d.risk;
+    $('strategyRrRange').textContent=rrRange(d.settings);
     const enabled=m.new_entries_enabled && m.execution_ready;
     $('botPill').className='pill '+(enabled?'good':m.execution_ready?'warn':'bad');
     $('botText').textContent=enabled?'RUNNING / NEW TRADES ON':m.execution_ready?'RUNNING / NEW TRADES PAUSED':'TESTNET NOT READY';
