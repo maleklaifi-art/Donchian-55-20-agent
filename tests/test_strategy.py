@@ -28,12 +28,13 @@ def test_ids_are_deterministic():
     assert deterministic_id("nr7e", "ABC") != deterministic_id("nr7e", "ABD")
 
 
-def test_reward_risk_boundaries_are_inclusive():
-    assert not reward_risk_is_accepted(1.9999999)
+def test_reward_risk_is_strict_pine_lower_bound_without_upper_cap():
+    assert not reward_risk_is_accepted(1.0)
+    assert reward_risk_is_accepted(1.0000001)
     assert reward_risk_is_accepted(2.0)
-    assert reward_risk_is_accepted(3.0)
     assert reward_risk_is_accepted(4.0)
-    assert not reward_risk_is_accepted(4.0000001)
+    assert reward_risk_is_accepted(40.0)
+    assert not reward_risk_is_accepted(float("nan"))
 
 
 def test_display_diagnostics_preserve_app_and_indicator_values():
@@ -98,7 +99,7 @@ def test_existing_default_worker_setting_migrates_once(tmp_path):
     path.write_text('{"scan_workers": 8}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
     assert migrated.scan_workers == 100
-    assert migrated.settings_revision == 3
+    assert migrated.settings_revision == 4
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 8})
@@ -110,7 +111,7 @@ def test_previous_fast_worker_default_migrates_to_100_once(tmp_path):
     path.write_text('{"settings_revision": 2, "scan_workers": 50}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
     assert migrated.scan_workers == 100
-    assert migrated.settings_revision == 3
+    assert migrated.settings_revision == 4
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 50})
@@ -134,22 +135,22 @@ def test_previous_completed_daily_uses_immediately_prior_utc_day():
     assert previous.close == 106
 
 
-def test_evaluate_latest_uses_pivot_r2_tp_and_accepts_both_rr_boundaries():
+def test_evaluate_latest_uses_fixed_r2_and_no_upper_rr_cap():
     hour = 3_600_000
     candles = []
     for i in range(240):
-        open_time = i * hour
+        open_time = (i + 48) * hour
         candles.append(Candle(open_time, 100, 101, 99, 100, 1, open_time + hour - 1, 10))
-    open_time = 240 * hour
+    open_time = 288 * hour
     candles.append(Candle(open_time, 106, 111, 105, 110, 2, open_time + hour - 1, 20))
     now_ms = candles[-1].close_time + 1
 
     for previous_daily, expected_tp, expected_rr in [
-        (Candle(0, 105, 115, 105, 110, 1, 0, 1), 120.0, 2.0),
-        (Candle(0, 110, 120, 100, 110, 1, 0, 1), 130.0, 4.0),
+        (Candle(0, 105, 115, 105, 110, 1, 0, 1), 120.0, 10.0),
+        (Candle(0, 110, 120, 100, 110, 1, 0, 1), 130.0, 20.0),
     ]:
         with (
-            patch.object(strategy, "latest_prior_nr7_box", return_value=(105.0, 105.0)),
+            patch.object(strategy, "latest_prior_nr7_box", return_value=(105.0, 109.0)),
             patch.object(strategy, "app_volume_surge", return_value=2.0),
             patch.object(strategy, "is_stablecoin_at_signal", return_value=False),
             patch.object(strategy, "strong_pivot_state", return_value=[(True, 140.0)] * len(candles)),
@@ -166,15 +167,15 @@ def test_closed_signal_values_are_frozen_during_following_hour():
     hour = 3_600_000
     candles = []
     for i in range(240):
-        open_time = i * hour
+        open_time = (i + 48) * hour
         candles.append(Candle(open_time, 100, 101, 99, 100, 1, open_time + hour - 1, 10))
-    breakout_open = 240 * hour
+    breakout_open = 288 * hour
     breakout = Candle(breakout_open, 106, 111, 105, 110, 2, breakout_open + hour - 1, 20)
-    live = Candle(241 * hour, 110, 999, 1, 500, 999, 242 * hour - 1, 9999)
+    live = Candle(289 * hour, 110, 999, 1, 500, 999, 290 * hour - 1, 9999)
     candles.extend([breakout, live])
     previous_daily = Candle(0, 105, 115, 105, 110, 1, 0, 1)
     with (
-        patch.object(strategy, "latest_prior_nr7_box", return_value=(105.0, 105.0)),
+        patch.object(strategy, "latest_prior_nr7_box", return_value=(105.0, 109.0)),
         patch.object(strategy, "app_volume_surge", return_value=2.0),
         patch.object(strategy, "is_stablecoin_at_signal", return_value=False),
         patch.object(strategy, "strong_pivot_state", return_value=[(True, 140.0)] * len(candles)),
@@ -187,17 +188,13 @@ def test_closed_signal_values_are_frozen_during_following_hour():
     assert at_0100.to_dict() == at_0102.to_dict()
 
 
-def test_settings_are_persisted_and_validate_rr_order(tmp_path):
+def test_settings_persist_new_lower_bound_and_ignore_legacy_upper_cap(tmp_path):
     path = tmp_path / "settings.json"
     store = SettingsStore(str(path))
-    value = store.update({"top_n": 777, "minimum_reward_risk": 2.0, "maximum_reward_risk": 4.0})
-    assert value.top_n == 777
+    store.update({"top_n": 777, "minimum_reward_risk": 4.1, "maximum_reward_risk": 4.0})
+    assert SettingsStore(str(path)).get().minimum_reward_risk == 4.1
     assert SettingsStore(str(path)).get().top_n == 777
-    try:
-        store.update({"minimum_reward_risk": 4.1, "maximum_reward_risk": 4.0})
-        assert False, "invalid R:R order should fail"
-    except ValueError:
-        pass
+    assert "maximum_reward_risk" not in store.get().public_dict()
 
 
 def test_previous_trade_does_not_block_another_entry(tmp_path):
@@ -266,3 +263,4 @@ def test_dashboard_database_open_close_lifecycle(tmp_path):
     assert stats["wins"] == 1
     assert stats["realized_pnl_usdt"] == 4.0
     assert stats["realized_r"] == 2.0
+

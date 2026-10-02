@@ -16,8 +16,11 @@ Use this once when deploying the demo agent.
 - [ ] Deploy and open the public HTTPS dashboard URL.
 - [ ] Confirm **Execution: READY**.
 - [ ] Confirm **New entries: ENABLED** after startup when `AUTO_START_NEW_TRADES=true`.
-- [ ] Review risk settings: $200 bankroll cap, $2 maximum planned risk per trade, multiple positions funded by available balance.
+- [ ] Review risk settings: $200 bankroll cap, $20 maximum position notional, $2 maximum planned risk per trade, multiple positions funded by available balance.
 - [ ] Confirm the dashboard reports Testnet **READY**; use **STOP NEW TRADES** whenever you want to pause entries.
 - [ ] Leave it on demo until the forward-test sample is large enough to evaluate.
 
 Normal daily use after this setup requires only the dashboard; no terminal command is required.
+
+
+For v2, verify the label says NR7/Supertrend, no Sun/Mon UTC and stop <2.56%; App volume accepts 0; R:R has no upper cap. See `docs/NR7_AGENT_STRATEGY_HANDOFF.md` for the exact migration and exit behavior.

@@ -16,7 +16,7 @@
   <div class="top">
     <div class="brand">
       <h1>NR7 Autonomous Demo Agent</h1>
-      <p>Exact App + Pivot-R2 Pine · <span id="strategyRrRange">Loading R:R settings…</span> · Binance Spot Testnet</p>
+      <p>App + NR7/Supertrend Pine · <span id="strategyRrRange">Loading R:R settings…</span> · Binance Spot Testnet</p>
     </div>
     <div class="controls">
       <span id="botPill" class="pill warn"><span class="dot"></span><span id="botText">Loading…</span></span>
@@ -69,13 +69,16 @@
       <div class="field"><label>Top Binance USDT symbols</label><input id="setTopN" type="number" min="1" max="1000"></div>
       <div class="field"><label>1H history bars</label><input id="setHistory" type="number" min="240" max="1000"></div>
       <div class="field"><label>Concurrent workers</label><input id="setWorkers" type="number" min="1" max="100"></div>
-      <div class="field"><label>App volume surge (strictly &gt;)</label><input id="setAppSurge" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field"><label>App volume surge (&gt;; 0 disables)</label><input id="setAppSurge" type="number" min="0" max="20" step="0.1"></div>
       <div class="field"><label>Indicator volume lookback</label><input id="setLookback" type="number" min="1" max="500"></div>
-      <div class="field"><label>Indicator volume surge (≥)</label><input id="setIndicatorSurge" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field"><label>Pine volume surge (≥; 0 disables)</label><input id="setIndicatorSurge" type="number" min="0" max="20" step="0.1"></div>
       <div class="field"><label>Minimum close position</label><input id="setClosePosition" type="number" min="0" max="1" step="0.05"></div>
       <div class="field"><label>LuxAlgo swing length</label><input id="setSwing" type="number" min="10" max="200"></div>
-      <div class="field"><label>Minimum R:R (inclusive)</label><input id="setMinRr" type="number" min="0" max="20" step="0.1"></div>
-      <div class="field"><label>Maximum R:R (inclusive)</label><input id="setMaxRr" type="number" min="0" max="20" step="0.1"></div>
+      <div class="field"><label>Pine minimum R:R (strictly &gt;)</label><input id="setMinRr" type="number" min="0" max="20" step="0.1"></div>
+      <div class="field"><label>Supertrend ATR period</label><input id="setStPeriod" type="number" min="1" max="200"></div>
+      <div class="field"><label>Supertrend multiplier (hl2)</label><input id="setStMultiplier" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field check"><input id="setStWilder" type="checkbox"><label for="setStWilder">Wilder ATR (off = SMA)</label></div>
+      <p>No Sunday/Monday entries (UTC close). Stop distance &lt; 2.56%. No upper R:R limit. Exits: fixed R2 or box low.</p>
       <div class="field check"><input id="setTelegramEnabled" type="checkbox"><label for="setTelegramEnabled">Telegram alerts enabled</label></div>
       <div class="field"><label>Telegram chat ID</label><input id="setTelegramChat" type="text"></div>
       <div class="field"><label>New Telegram bot token (blank keeps current)</label><input id="setTelegramToken" type="password" autocomplete="new-password"></div>
@@ -83,7 +86,7 @@
     <div class="settings-actions"><button id="saveSettingsBtn" class="btn secondary" type="button">SAVE SETTINGS</button><span id="settingsSaved" class="settings-note"></span></div>
   </section>
 
-  <div class="footer"><span>Mode is hard-wired to Binance Spot Testnet only.</span><span id="updated">Not updated yet</span></div>
+  <div class="footer"><span>Testnet fills only. Production trade touches also trigger exits; fills can differ from chart prices.</span><span id="updated">Not updated yet</span></div>
 </div>
 <script>
 (() => {
@@ -97,7 +100,7 @@
   const date = v => !v ? '—' : new Date(v).toLocaleString();
   const cls = v => Number(v)>0?'good':Number(v)<0?'bad':'';
   const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-  const rrRange = settings => `${num(settings?.minimum_reward_risk,2)}≤R:R≤${num(settings?.maximum_reward_risk,2)}`;
+  const rrRange = settings => `R:R > ${num(settings?.minimum_reward_risk,2)} · ST green · no Sun/Mon · stop < 2.56%`;
 
   function setMoney(id,v){ const el=$(id); el.textContent=money(v); el.className='v '+cls(v); }
   function showError(msg){ const e=$('errorbar'); if(!msg){e.style.display='none';e.textContent='';return} e.style.display='block';e.textContent=msg; }
@@ -154,7 +157,7 @@
     $('setTopN').value=s.top_n;$('setHistory').value=s.hourly_history_bars;$('setWorkers').value=s.scan_workers;
     $('setAppSurge').value=s.app_minimum_surge;$('setLookback').value=s.indicator_volume_lookback;
     $('setIndicatorSurge').value=s.indicator_minimum_surge;$('setClosePosition').value=s.minimum_close_position;
-    $('setSwing').value=s.swing_length;$('setMinRr').value=s.minimum_reward_risk;$('setMaxRr').value=s.maximum_reward_risk;
+    $('setSwing').value=s.swing_length;$('setMinRr').value=s.minimum_reward_risk;$('setStPeriod').value=s.supertrend_period;$('setStMultiplier').value=s.supertrend_multiplier;$('setStWilder').checked=s.supertrend_wilder;
     $('setTelegramEnabled').checked=!!s.telegram_enabled;$('setTelegramChat').value=s.telegram_chat_id||'';
     $('setTelegramToken').placeholder=s.telegram_token_configured?'Configured — leave blank to keep':'Not configured';
   }
@@ -177,8 +180,8 @@
       ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
       ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.valid_count} passed · ${d.scan.app_confirmed_count} confirmed · ${d.scan.filtered.length} filtered · ${d.scan.error_count} errors · ${num(d.scan.duration_seconds,2)}s`],
       ['Schedule','Every hour at H:00 UTC'],
-      ['Strategy',`App + Pivot-R2 Pine + ${num(d.settings.minimum_reward_risk,2)} ≤ R:R ≤ ${num(d.settings.maximum_reward_risk,2)}`],
-      ['Risk',`Max ${num(r.risk_per_trade_usdt,2)} USDT risk/trade · positions limited by available balance · no daily trade-count cap`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
+      ['Strategy',`App + NR7/Supertrend Pine · R:R > ${num(d.settings.minimum_reward_risk,2)} · no Sun/Mon UTC · stop < 2.56%`],
+      ['Risk',`Max ${num(r.risk_per_trade_usdt,2)} USDT risk/trade · max ${num(r.max_position_notional_usdt,2)} USDT/position · positions limited by available balance · no daily trade-count cap`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
     ];
     $('engineBody').innerHTML=items.map(x=>`<tr><th style="width:180px">${x[0]}</th><td>${x[1]}</td></tr>`).join('');
     $('scanMeta').textContent=m.scan_in_progress?'Scanning market now…':`Last scan: ${date(m.last_scan_completed)}`;
@@ -214,7 +217,7 @@
     try{const res=await fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrf}});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);await refresh()}catch(e){showError(e.message)}finally{if(state){$('startBtn').disabled=!state.meta.execution_ready||state.meta.new_entries_enabled;$('stopBtn').disabled=!state.meta.new_entries_enabled}}
   }
   async function saveSettings(){
-    const body={top_n:Number($('setTopN').value),hourly_history_bars:Number($('setHistory').value),scan_workers:Number($('setWorkers').value),app_minimum_surge:Number($('setAppSurge').value),indicator_volume_lookback:Number($('setLookback').value),indicator_minimum_surge:Number($('setIndicatorSurge').value),minimum_close_position:Number($('setClosePosition').value),swing_length:Number($('setSwing').value),minimum_reward_risk:Number($('setMinRr').value),maximum_reward_risk:Number($('setMaxRr').value),telegram_enabled:$('setTelegramEnabled').checked,telegram_chat_id:$('setTelegramChat').value,telegram_bot_token:$('setTelegramToken').value};
+    const body={top_n:Number($('setTopN').value),hourly_history_bars:Number($('setHistory').value),scan_workers:Number($('setWorkers').value),app_minimum_surge:Number($('setAppSurge').value),indicator_volume_lookback:Number($('setLookback').value),indicator_minimum_surge:Number($('setIndicatorSurge').value),minimum_close_position:Number($('setClosePosition').value),swing_length:Number($('setSwing').value),minimum_reward_risk:Number($('setMinRr').value),supertrend_period:Number($('setStPeriod').value),supertrend_multiplier:Number($('setStMultiplier').value),supertrend_wilder:$('setStWilder').checked,telegram_enabled:$('setTelegramEnabled').checked,telegram_chat_id:$('setTelegramChat').value,telegram_bot_token:$('setTelegramToken').value};
     $('saveSettingsBtn').disabled=true;$('settingsSaved').textContent='Saving…';
     try{const res=await fetch('/api/config',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(body)});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);$('setTelegramToken').value='';$('settingsSaved').textContent='Saved. Applies on the next scan.';settingsInitialized=false;await refresh()}catch(e){showError(e.message);$('settingsSaved').textContent='Not saved.'}finally{$('saveSettingsBtn').disabled=false}
   }
@@ -230,3 +233,4 @@
 </script>
 </body>
 </html>
+

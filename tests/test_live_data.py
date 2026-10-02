@@ -114,11 +114,12 @@ def test_stale_entry_blocked_before_state_write_or_exchange_call(tmp_path):
 
 
 def test_user_lowered_filters_still_work_for_fresh_signal():
+    NOW = int(datetime(2026, 9, 29, 19, tzinfo=timezone.utc).timestamp() * 1000)
     rows = history(NOW)
     rows[-1] = Candle(NOW - HOUR, 106, 118, 105, 110, 20, NOW - 1, 2000)
     cfg = StrategyConfig(app_minimum_surge=0.1, minimum_close_position=0.3)
     with (
-        patch("strategy.latest_prior_nr7_box", return_value=(105.0, 105.0)),
+        patch("strategy.latest_prior_nr7_box", return_value=(105.0, 109.0)),
         patch("strategy.app_volume_surge", return_value=0.15),
         patch("strategy.is_stablecoin_at_signal", return_value=False),
         patch("strategy.strong_pivot_state", return_value=[(True, 140.0)] * len(rows)),
@@ -129,3 +130,4 @@ def test_user_lowered_filters_still_work_for_fresh_signal():
     assert result.signal.app_volume_surge == 0.15
     assert 0.38 < result.signal.close_position < 0.39
     assert cfg.app_minimum_surge == 0.1 and cfg.minimum_close_position == 0.3
+

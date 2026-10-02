@@ -183,9 +183,11 @@ class CloudDemoEngine:
             indicator_volume_lookback=settings.indicator_volume_lookback,
             indicator_minimum_surge=settings.indicator_minimum_surge,
             minimum_close_position=settings.minimum_close_position,
-            pine_minimum_reward_risk=1.0,
+            pine_minimum_reward_risk=settings.minimum_reward_risk,
             minimum_reward_risk=settings.minimum_reward_risk,
-            maximum_reward_risk=settings.maximum_reward_risk,
+            supertrend_period=settings.supertrend_period,
+            supertrend_multiplier=settings.supertrend_multiplier,
+            supertrend_wilder=settings.supertrend_wilder,
             swing_length=settings.swing_length,
         )
 
@@ -291,7 +293,7 @@ class CloudDemoEngine:
         with self.state_lock:
             state = load_state(self.cfg.state_file)
             if self.execution_ready and self.exec_client is not None:
-                sync_positions(self.exec_client, state, self.logger, self.cfg)
+                sync_positions(self.exec_client, state, self.logger, self.cfg, self.market, self.rules)
                 try:
                     account = self.exec_client.account()
                     self.testnet_free_usdt = next(
@@ -361,6 +363,7 @@ class CloudDemoEngine:
             "meta": meta,
             "risk": {
                 "risk_per_trade_usdt": min(2.0, self.cfg.risk_per_trade_usdt),
+                "max_position_notional_usdt": self.cfg.max_position_notional_usdt,
                 "max_open_positions": None,
                 "max_trades_per_utc_day": None,
                 "max_total_open_risk_usdt": None,
@@ -578,3 +581,4 @@ if __name__ == "__main__":
     finally:
         engine.stop_event.set()
         server.server_close()
+

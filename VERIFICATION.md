@@ -1,22 +1,26 @@
-# Verification performed
+# Verification — NR7/Supertrend v2 (2026-10-02)
 
-Checks completed for this cloud source bundle:
+Run from the repository root:
 
-- Python syntax compilation passed for every top-level Python module.
-- All 11 automated tests passed.
-- Inclusive R:R boundaries passed: exactly 2.00 and 4.00 are accepted; values outside the configured interval are rejected.
-- Signal tests confirmed that TP is previous-day Classic Pivot R2 and Strong High remains an entry filter only.
-- A completed-candle freeze test confirmed that the same signal and volume values remain unchanged at 01:00 and 01:02 while the following candle is live.
-- The live-ask and post-fill gates receive the same editable R:R limits used by the scanner.
-- Post-fill absolute risk above $2 causes an emergency Testnet flatten.
-- Filled entries remain in the execution ledger; there is no daily trade-count cap.
-- Concurrent positions reserve their entry notional against the $200 demo bankroll. Each new order is also capped by current free USDT.
-- The current Binance OCO request shape is covered by a test: `POST /api/v3/orderList/oco` with `aboveType=TAKE_PROFIT` and `belowType=STOP_LOSS`.
-- Runtime settings persistence and minimum/maximum R:R validation passed.
-- Dashboard database open-to-TP-close lifecycle, realized R, and USDT P&L aggregation passed.
-- Dashboard JavaScript syntax passed in Node.js.
-- Local HTTP smoke test passed with execution disabled: health, password login, authenticated dashboard, status JSON, CSRF, and settings update.
-- Live Binance public-market self-check passed during packaging.
-- Source scans found no embedded Telegram credential and no production execution URL.
+```bash
+python -m pip install -r requirements.txt pytest==8.3.5
+python -m pytest -q
+```
 
-Not verified here: a real authenticated Binance Spot Testnet order, because no user Testnet credentials were available. The execution client is hard-wired to Binance Spot Testnet.
+Local result: **68 passed**. Exchange calls in the tests are simulated; no trading credentials or real orders were used.
+
+Covered behavior:
+
+- Supplied Pine's strict R:R lower bound, no upper cap, fixed daily R2/box-low prices.
+- Hand-calculated custom Supertrend flips, carried trend and equality boundaries.
+- UTC closing-boundary Sunday/Monday exclusions and strict decimal 2.56% stop boundaries.
+- Separate App/Pine zero-volume bypass, safe confidence arithmetic, JSON save/reload and revision-4 migration.
+- Fresh closed candles, stale/missing data rejection, original status categories and symbol eligibility checks.
+- Multiple positions, $20 order cap, available capital, per-trade risk, duplicate protection, existing kill switch/daily loss controls.
+- TP touch followed by reversal, stop first, native fill/cancel race, partial fills, lost sell response followed by state reload, cancel failure, cursor continuation and no fabricated fills.
+- Recovery of a closed state record into an existing OPEN dashboard row; win/loss counts use gross P&L sign.
+- Local HTTP health/auth/CSRF/settings integration. Zero values round-trip through `/api/config`; old upper-RR UI is absent; new ST controls connect to runtime configuration.
+
+Also passed Python compilation, JavaScript syntax validation with `node --check`, dashboard DOM-ID checks, and `git diff --check`.
+
+Not verified here: an authenticated Testnet execution, the specific historical DUSK trade, a Railway deployment, TradingView compilation, or bar-by-bar TradingView parity. No new backtest return is claimed. Production data and Testnet fills differ; polling is not instantaneous. Read the exact rules and limitations in `docs/NR7_AGENT_STRATEGY_HANDOFF.md`.

@@ -6,37 +6,19 @@ A cloud-ready **Binance Spot Testnet-only** autonomous trading agent with a priv
 
 The cloud service runs continuously. Your PC, browser, and home Wi-Fi do not need to stay on after deployment. The cloud server itself must stay online because it needs live Binance market data and Testnet order access.
 
-The agent does not use AI discretion to invent trades. It scans independently in the cloud and executes the same deterministic rules as the phone's independent local scanner, with Testnet execution added. Neither scanner depends on the other.
+The agent does not use AI discretion to invent trades. It scans independently in the cloud and executes deterministic rules with Testnet execution. This updated cloud strategy is independent of the unchanged mobile scanner.
 
-### Frozen entry stack
+### Current entry stack (v2)
 
-The universe matches the original phone scanner: Binance 24H-ticker symbols ending in USDT, excluding names containing UP/DOWN/BULL/BEAR, ranked by quote volume and capped by the editable Top N setting.
+**App + NR7/confirmed Supertrend Pine + exclude Sunday/Monday UTC entries + stop distance <2.56%.**
 
-The cloud scanner uses 100 concurrent market-data workers and a 200-connection reuse pool by default. This changes transport time only; every symbol still downloads the same configured hourly history and runs every App and indicator rule.
+The complete specification, formulas, migration rules, execution limitations and embedded Pine are in [the AI handoff](docs/NR7_AGENT_STRATEGY_HANDOFF.md).
 
-A BUY is allowed only when **all** of these pass on a completed 1H candle:
+The App layer is retained, including daily quote-volume surge and the stablecoin filter. Its volume threshold is strict `>`; setting it to **0 disables only App volume**. The separate Pine hourly volume threshold is `>=` and also supports 0.
 
-**App layer**
-- Prior completed UTC day NR7 box.
-- Confirmed breakout: current completed 1H close > Box High and previous completed 1H close <= Box High.
-- Current UTC day's accumulated quote volume / average quote volume of the previous 8 completed UTC days is **strictly > 1.5x**.
-- The saved app stablecoin filter must pass.
+The supplied Pine layer requires a closed 1H NR7 breakout, strong close, confirmed Strong High and unrevisited pivot-high filter, previous-day R2 above the breakout high, and initialized green custom Supertrend (hl2, ATR10, multiplier3, Wilder by default). R:R must be **strictly >1.0** by default, with **no upper bound**. Weekdays use the exact UTC closing boundary; stop distance uses the signal close and must be strictly between 0 and 2.56%.
 
-**Indicator layer**
-- Breakout candle volume / average of the prior 168 completed 1H candles is **>= 1.5x**.
-- Breakout candle closes in its upper 25% (`closePosition >= 0.75`).
-- LuxAlgo-compatible Strong High state is active.
-- Nearest confirmed, fixed, still-unrevisited pivot high above the whole breakout candle exists as an entry filter only.
-- The single TP is Classic Pivot R2 from the immediately previous completed UTC daily candle, and R2 must be strictly above the entire breakout candle.
-- Stop loss is the exact active NR7 Box Low.
-
-**R:R layer**
-- `Risk = Entry - Box Low`
-- `Reward = TP - Entry`
-- The signal must satisfy inclusive **2 <= R:R <= 4**; exactly 2.00 and 4.00 are accepted.
-- The R:R is checked again at the live entry price and again after the Testnet market fill. If either value is outside `[2, 4]`, the order is rejected or the filled demo exposure is flattened.
-
-The confidence score follows the supplied Pine formula and uses its original `minimumRewardRisk = 1.0` scoring baseline, but eligibility and execution use the inclusive `[2, 4]` gate.
+Saved settings remain editable. Revision 4 replaces the old inclusive RR interval once; other saved thresholds remain unchanged. The mobile branch is not updated by this change.
 
 ## Risk management
 
@@ -46,7 +28,7 @@ The confidence score follows the supplied Pine formula and uses its original `mi
 - The $2 risk cap applies separately to each position; combined open risk may exceed $2.
 - Daily loss cutoff: **-3R**; new trades stop for the rest of the UTC day.
 - No leverage.
-- Maximum position notional: the available amount within the $200 demo cap.
+- Maximum position notional: **$20 USDT**, subject to available balance and exchange minimums.
 - Maximum entry drift from signal close: 0.30% by default.
 - Same symbol cannot have a second open position.
 - The same signal cannot be submitted twice.
@@ -69,7 +51,7 @@ The dashboard shows:
 - Full App + indicator Passed signals with Entry, TP, SL and diagnostics.
 - START NEW TRADES and STOP NEW TRADES controls.
 
-**STOP NEW TRADES does not cancel protection on existing positions.** Existing positions continue to be monitored until their Testnet TP/SL resolves.
+**STOP NEW TRADES does not cancel protection on existing positions.** Existing positions continue to be monitored for native Testnet fills and production trade-price touches of their fixed TP/SL.
 
 ## Persistent data
 
@@ -132,7 +114,11 @@ No PowerShell, terminal, ChatGPT session, or home PC is required for normal oper
 
 ## P&L note
 
-Closed-trade USDT P&L is derived from the entry fill and the filled Testnet protective exit order. It is intended for demo validation. The displayed USDT P&L is an **estimated gross result and may not include every commission conversion**. R results remain the strategy-normalized TP/SL result (`+actual R:R` on TP, `-1R` on SL).
+Closed-trade USDT P&L is derived from the entry fill and the filled Testnet protective exit order. It is intended for demo validation. The displayed USDT P&L is an **estimated gross result and may not include every commission conversion**. Realized R uses actual gross P&L / planned price risk. TP/SL labels describe the exit reason; win/loss counts use P&L sign.
+
+## Take-profit monitoring
+
+Exchange-hosted Testnet OCO protection remains active. The monitor also reads chronological production aggregate trades between polls, persists the first TP/SL touch, cancels and reconciles the Testnet bracket, then sells only the remaining quantity. This covers a production TP touch followed by a reversal between polls. A closed trade requires actual broker fills; no historical touch is booked as an assumed fill. The monitor polls every 15 seconds plus processing time, with bounded catch-up pages. Unknown sell responses retain their client ID for reconciliation, never blind resubmission. See the handoff for residual dust and ambiguous-request recovery.
 
 ## Important demo limitations
 
@@ -145,7 +131,8 @@ Closed-trade USDT P&L is derived from the entry fill and the filled Testnet prot
 
 - `cloud_app.py` — always-on cloud engine + dashboard server.
 - `demo_trader.py` — Testnet execution, risk manager, order protection and scanner plumbing.
-- `strategy.py` — frozen App + Indicator strategy logic.
+- `strategy.py` — App + NR7/Supertrend Pine strategy and entry filters.
+- `exit_monitor.py` — production-trigger monitoring and Testnet residual-exit reconciliation.
 - `database.py` — persistent dashboard database.
 - `templates/dashboard.html` — responsive dashboard UI.
 - `Dockerfile` — cloud container build.
@@ -156,3 +143,4 @@ Closed-trade USDT P&L is derived from the entry fill and the filled Testnet prot
 ## Default dashboard password
 
 If `DASHBOARD_PASSWORD` is missing, the service uses `demo-change-me` and displays a red security warning. Do not expose a deployment publicly with that default.
+

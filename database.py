@@ -230,6 +230,9 @@ class TradeDatabase:
                             self._f(r.get("r")), r.get("opened_at"), r.get("closed_at"), json.dumps(r, default=str),
                         ),
                     )
+            # State can have committed a broker fill before the dashboard logger
+            # ran. Repair an existing OPEN database row on restart as well.
+            self.close_trade(r)
 
     def open_trades(self) -> List[Dict[str, Any]]:
         with self._connect() as c:
@@ -279,7 +282,7 @@ class TradeDatabase:
         today = datetime.now(timezone.utc).date().isoformat()
         with self._connect() as c:
             closed = c.execute(
-                "SELECT COUNT(*) n, SUM(CASE WHEN outcome='TP' THEN 1 ELSE 0 END) wins, SUM(CASE WHEN outcome='SL' THEN 1 ELSE 0 END) losses, COALESCE(SUM(pnl_usdt),0) pnl, COALESCE(SUM(realized_r),0) r FROM trades WHERE status='CLOSED'"
+                "SELECT COUNT(*) n, SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) wins, SUM(CASE WHEN pnl_usdt < 0 THEN 1 ELSE 0 END) losses, COALESCE(SUM(pnl_usdt),0) pnl, COALESCE(SUM(realized_r),0) r FROM trades WHERE status='CLOSED'"
             ).fetchone()
             day = c.execute(
                 "SELECT COALESCE(SUM(pnl_usdt),0) pnl, COALESCE(SUM(realized_r),0) r FROM trades WHERE status='CLOSED' AND substr(closed_at,1,10)=?",
@@ -303,3 +306,4 @@ class TradeDatabase:
             "open_count": int(open_row["n"] or 0),
             "open_risk_usdt": float(open_row["risk"] or 0),
         }
+

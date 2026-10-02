@@ -32,6 +32,8 @@ from strategy import (
     reward_risk_is_accepted,
 )
 
+from exit_monitor import monitor_production_exit
+
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
 
@@ -47,6 +49,7 @@ class BotConfig:
     risk_per_trade_usdt: float = 2.0
     daily_loss_limit_r: float = 3.0
     max_position_notional_pct: float = 100.0
+    max_position_notional_usdt: float = 20.0
     max_entry_drift_pct: float = 0.30
     demo_equity_cap_usdt: float = 200.0
 
@@ -169,6 +172,14 @@ class PublicMarketClient:
             for r in rows
         ]
 
+    def aggregate_trades(self, symbol: str, *, start_ms=None, from_id=None):
+        params = {"symbol": symbol, "limit": 1000}
+        if from_id is not None:
+            params["fromId"] = from_id
+        else:
+            params["startTime"] = start_ms
+        return self.get("/api/v3/aggTrades", params)
+
     def best_ask(self, symbol: str) -> float:
         x = self.get("/api/v3/ticker/bookTicker", {"symbol": symbol})
         return float(x["askPrice"])
@@ -243,6 +254,9 @@ class TestnetExecutionClient:
         else:
             raise ValueError("order list id required")
         return self._signed("GET", "/api/v3/orderList", p)
+
+    def cancel_order_list(self, symbol: str, order_list_id: int):
+        return self._signed("DELETE", "/api/v3/orderList", {"symbol": symbol, "orderListId": order_list_id})
 
     def market_buy_quote(self, symbol: str, quote_qty: str, client_order_id: str):
         p = {
@@ -571,30 +585,37 @@ def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig
     return [Signal(**row) for row in scan_market_detailed(market, cfg, scfg, logger, on_signal)["signals"]]
 
 
-def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: EventLogger, cfg: BotConfig):
+def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: EventLogger, cfg: BotConfig, market=None, rules=None):
     changed = False
     for sym, pd in list(state.get("open_positions", {}).items()):
         pos = Position(**pd)
         try:
             tp_ord = exec_client.order(sym, order_id=pos.tp_order_id)
             sl_ord = exec_client.order(sym, order_id=pos.sl_order_id)
+            watched = None
+            if market is not None:
+                watched = monitor_production_exit(exec_client, market, state, pos, tp_ord, sl_ord, cfg, logger, (rules or {}).get(sym))
+            if state.get("exit_watch", {}).get(pos.signal_key, {}).get("pending_client_id") and not watched:
+                continue
             tp_filled = tp_ord.get("status") == "FILLED"
             sl_filled = sl_ord.get("status") == "FILLED"
             if tp_filled and sl_filled:
                 logger.emit("FATAL_POSITION_STATE", symbol=sym, reason="both OCO legs report FILLED")
                 continue
-            if tp_filled or sl_filled:
-                filled_order = tp_ord if tp_filled else sl_ord
-                result_r = pos.rr if tp_filled else -1.0
-                outcome = "TP" if tp_filled else "SL"
+            if tp_filled or sl_filled or watched:
+                filled_order, outcome = watched if watched else (tp_ord if tp_filled else sl_ord, "TP" if tp_filled else "SL")
                 close_ms = int(filled_order.get("updateTime", int(time.time() * 1000)))
                 close_dt = datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc)
-                executed_qty = float(filled_order.get("executedQty", pos.quantity) or pos.quantity)
+                executed_qty = float(filled_order.get("executedQty", 0) or 0)
                 cumulative_quote = float(filled_order.get("cummulativeQuoteQty", 0) or 0)
-                exit_price = (cumulative_quote / executed_qty) if executed_qty > 0 and cumulative_quote > 0 else (pos.tp if tp_filled else pos.sl)
+                if executed_qty <= 0 or cumulative_quote <= 0:
+                    logger.emit("POSITION_SYNC_ERROR", symbol=sym, error="Filled exit missing actual execution values; retaining position")
+                    continue
+                exit_price = cumulative_quote / executed_qty
                 entry_quote = pos.entry_price * pos.quantity
                 exit_quote = exit_price * executed_qty
                 pnl_usdt = (exit_price - pos.entry_price) * min(pos.quantity, executed_qty)
+                result_r = pnl_usdt / pos.risk_usdt if pos.risk_usdt > 0 else 0.0
                 pnl_pct = ((exit_price / pos.entry_price) - 1.0) * 100.0 if pos.entry_price > 0 else 0.0
                 record = {
                     "day": close_dt.date().isoformat(), "symbol": sym, "r": result_r,
@@ -609,6 +630,7 @@ def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: Eve
                 }
                 state["realized"].append(record)
                 del state["open_positions"][sym]
+                save_state(cfg.state_file, state)
                 logger.emit("POSITION_CLOSED", **record, realized_r=result_r)
                 changed = True
             else:
@@ -642,7 +664,7 @@ def place_signal(
     state: dict,
     cfg: BotConfig,
     logger: EventLogger,
-    minimum_reward_risk: float = 2.0,
+    minimum_reward_risk: float = 1.0,
     maximum_reward_risk: float = 4.0,
 ):
     key = signal_key(sig)
@@ -700,7 +722,7 @@ def place_signal(
     if not reward_risk_is_accepted(execution_rr, minimum_reward_risk, maximum_reward_risk):
         logger.emit(
             "TRADE_REJECTED", symbol=sig.symbol,
-            reason=f"execution-time RR outside [{minimum_reward_risk:g},{maximum_reward_risk:g}]",
+            reason=f"execution-time RR must be strictly > {minimum_reward_risk:g}",
             execution_rr=execution_rr, signal_key=key,
         )
         return
@@ -712,7 +734,7 @@ def place_signal(
 
     stop_distance = live_ask - sig.sl
     qty_by_risk = risk_budget / stop_distance
-    max_notional = equity * cfg.max_position_notional_pct / 100.0
+    max_notional = min(cfg.max_position_notional_usdt, equity * cfg.max_position_notional_pct / 100.0)
     qty_by_notional = max_notional / live_ask
     qty = min(qty_by_risk, qty_by_notional)
     quote_notional = qty * live_ask
@@ -789,7 +811,7 @@ def place_signal(
         logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="protective quantity invalid", signal_key=key)
         return
 
-    # Re-check the same inclusive mobile-parity R:R gate using the actual fill.
+    # Re-check the strict Pine lower bound using the actual fill (no RR cap).
     actual_risk = avg_fill - float(sl_tick)
     actual_reward = float(tp_tick) - avg_fill
     actual_rr = actual_reward / actual_risk if actual_risk > 0 else -1
@@ -808,7 +830,7 @@ def place_signal(
         exec_client.market_sell_qty(sig.symbol, fmt_dec(protect_qty), deterministic_id("nr7x", key))
         logger.emit(
             "EMERGENCY_FLATTEN", symbol=sig.symbol,
-            reason=f"fill changed RR outside [{minimum_reward_risk:g},{maximum_reward_risk:g}]",
+            reason=f"fill changed RR to <= {minimum_reward_risk:g}",
             actual_rr=actual_rr, signal_key=key,
         )
         return
@@ -869,6 +891,10 @@ def place_signal(
         sl_order_id=int(sl_order_id),
     )
     state["open_positions"][sig.symbol] = asdict(pos)
+    state.setdefault("exit_watch", {})[key] = {
+        "start_ms": int(entry.get("transactTime", int(time.time() * 1000))) + 1,
+        "last_id": None,
+    }
     save_state(cfg.state_file, state)
     logger.emit("POSITION_OPENED", **asdict(pos))
 
@@ -881,7 +907,7 @@ def run_once(cfg: BotConfig, execute_demo: bool):
         indicator_minimum_surge=1.5,
         minimum_close_position=0.75,
         pine_minimum_reward_risk=1.0,
-        minimum_reward_risk=2.0,
+        minimum_reward_risk=1.0,
         maximum_reward_risk=4.0,
         swing_length=50,
     )
@@ -898,7 +924,7 @@ def run_once(cfg: BotConfig, execute_demo: bool):
             cfg.recv_window_ms,
         )
         rules = load_rules(exec_client.exchange_info())
-        sync_positions(exec_client, state, logger, cfg)
+        sync_positions(exec_client, state, logger, cfg, market, rules)
 
     signals = scan_market(market, cfg, scfg, logger)
     if not execute_demo:
@@ -935,3 +961,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

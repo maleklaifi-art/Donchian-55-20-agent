@@ -1,16 +1,25 @@
 //@version=5
-indicator("Automatic NR7 + Strong Filter + Pivot R2 TP", overlay=false, max_labels_count=500)
+strategy("NR7 + Supertrend | Weekday & Stop 2.56 [Strategy v2]", overlay=true, max_labels_count=500,
+  pyramiding=0, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+  commission_type=strategy.commission.percent, commission_value=0.1, slippage=1,
+  margin_long=100, margin_short=100, process_orders_on_close=true,
+  calc_on_every_tick=false, calc_on_order_fills=false, use_bar_magnifier=false)
+// Costs and sizing are editable in Properties: 0.10% per side, 1 tick slippage,
+// 10% equity per trade by default. These are assumptions, not measured costs.
+// One position per chart symbol, no pyramiding, no daily trade limit.
+// Agent reference: Pine signal/exit layer ONLY; the separate App filter is in strategy.py.
+// Header sizing is the original per-chart simulation, NOT the agent's $200/$20/$2 shared portfolio.
+// Agent uses Testnet trigger-to-market protection; Pine uses simulated limit TP/stop.
+// Minimum Volume Surge=0 disables only this Pine volume gate; no division by zero.
 
 // Settings
 volumeLookback       = input.int(168, "Volume Lookback", minval=1)
-minimumSurge         = input.float(1.5, "Minimum Volume Surge", minval=0.1, step=0.1)
+minimumSurge         = input.float(1.5, "Minimum Volume Surge", minval=0.0, step=0.1)
 minimumClosePosition = input.float(0.75, "Minimum Close Position", minval=0.0, maxval=1.0, step=0.05)
 minimumRewardRisk    = input.float(1.0, "Minimum Reward/Risk", minval=0.0, step=0.1)
-minimumAcceptedRR    = input.float(2.0, "Agent Minimum Accepted R:R", minval=0.0, step=0.1)
-maximumAcceptedRR    = input.float(4.0, "Agent Maximum Accepted R:R", minval=0.0, step=0.1)
 swingLength          = input.int(50, "LuxAlgo Swing Length", minval=10)
 
-// Previous completed daily candle
+// Binance Spot daily sessions are UTC. Other exchanges may use different daily sessions.
 previousDailyHigh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 previousDailyLow = request.security(syminfo.tickerid, "D", low[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
 previousDailyClose = request.security(syminfo.tickerid, "D", close[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
@@ -53,7 +62,7 @@ var int swingTrend = 0
 var array<float> confirmedHighLevels = array.new_float()
 var array<int> confirmedHighBars = array.new_int()
 
-// Remove old targets touched after their confirmation bar.
+// Remove old pivot highs touched after their confirmation bar.
 if array.size(confirmedHighLevels) > 0
     for targetIndex = array.size(confirmedHighLevels) - 1 to 0
         targetLevel = array.get(confirmedHighLevels, targetIndex)
@@ -83,8 +92,8 @@ if not na(currentSwingLow) and ta.crossunder(close, currentSwingLow) and not swi
 
 currentHighIsStrong = swingTrend == -1
 
-// Nearest confirmed, fixed, still-unrevisited pivot high above the entire
-// candle. This remains an ENTRY FILTER; it is not the take-profit price.
+// Keep the old nearest confirmed, still-unrevisited pivot-high requirement
+// as an ENTRY FILTER. It is no longer the take-profit price.
 float fixedStrongHighFilter = na
 if currentHighIsStrong and array.size(confirmedHighLevels) > 0
     for targetIndex = 0 to array.size(confirmedHighLevels) - 1
@@ -92,37 +101,38 @@ if currentHighIsStrong and array.size(confirmedHighLevels) > 0
         if targetLevel > high and (na(fixedStrongHighFilter) or targetLevel < fixedStrongHighFilter)
             fixedStrongHighFilter := targetLevel
 
-// Actual TP: Classic Pivot R2 from the previous completed UTC daily candle.
+// New TP: Classic Pivot R2 from the previous completed UTC daily candle.
 classicPivot = (previousDailyHigh + previousDailyLow + previousDailyClose) / 3.0
 pivotR2Target = classicPivot + (previousDailyHigh - previousDailyLow)
 
-// Exclude the current candle from the volume baseline.
+// Exclude the current breakout candle from the hourly volume baseline.
 averageVolume = ta.sma(volume, volumeLookback)[1]
 requiredVolume = averageVolume * minimumSurge
 volumeSurge = not na(averageVolume) and averageVolume > 0 ? volume / averageVolume : 0.0
 
-// Newly confirmed crossing above the automatic NR7 Box High.
+// Newly confirmed crossing above the automatic NR7 box high.
 confirmedBreakout = barstate.isconfirmed and not na(boxHigh) and close > boxHigh and close[1] <= boxHigh
 
-// Require the candle to close in its upper 25%.
+// Require the breakout candle to close in its upper 25% with default settings.
 candleRange = high - low
 closePosition = candleRange > 0 ? (close - low) / candleRange : 0.0
 strongClose = closePosition >= minimumClosePosition
 
-// TP = previous-day Pivot R2. SL = NR7 box low.
+// Entry = confirmed breakout close, TP = previous-day Pivot R2,
+// SL = NR7 box low. TP must be above the complete breakout candle.
 risk = not na(boxLow) ? close - boxLow : na
 reward = not na(pivotR2Target) ? pivotR2Target - close : na
 rewardRisk = not na(risk) and risk > 0 and not na(reward) ? reward / risk : na
-positiveRewardRisk = not na(rewardRisk) and rewardRisk > minimumRewardRisk
 pivotR2AboveBreakout = not na(pivotR2Target) and pivotR2Target > high
-acceptedAgentRewardRisk = not na(rewardRisk) and rewardRisk >= minimumAcceptedRR and rewardRisk <= maximumAcceptedRR
+positiveRewardRisk = not na(rewardRisk) and rewardRisk > minimumRewardRisk
 
 isOneHourChart = timeframe.isminutes and timeframe.multiplier == 60
-validBreakout = isOneHourChart and confirmedBreakout and volumeSurge >= minimumSurge and strongClose and currentHighIsStrong and not na(fixedStrongHighFilter) and pivotR2AboveBreakout and positiveRewardRisk and acceptedAgentRewardRisk
 
-// Rule-based setup confidence. This is a relative quality score, not a
-// predicted probability or guarantee. It does not change signal eligibility.
-volumeStrength = math.min(math.max((volumeSurge - minimumSurge) / minimumSurge, 0.0), 1.0)
+// All original entry conditions remain. Only the TP calculation changed.
+validBreakout = isOneHourChart and confirmedBreakout and volumeSurge >= minimumSurge and strongClose and currentHighIsStrong and not na(fixedStrongHighFilter) and pivotR2AboveBreakout and positiveRewardRisk
+
+// Rule-based setup confidence. This is not a probability or guarantee.
+volumeStrength = minimumSurge > 0 ? math.min(math.max((volumeSurge - minimumSurge) / minimumSurge, 0.0), 1.0) : 0.0
 closePositionRoom = 1.0 - minimumClosePosition
 closeStrength = closePositionRoom > 0 ? math.min(math.max((closePosition - minimumClosePosition) / closePositionRoom, 0.0), 1.0) : 1.0
 rewardRiskStrength = math.min(math.max((rewardRisk - minimumRewardRisk) / 2.0, 0.0), 1.0)
@@ -130,33 +140,94 @@ confidenceScore = math.round(50.0 + 20.0 * volumeStrength + 15.0 * closeStrength
 confidenceLevel = confidenceScore >= 80 ? "HIGH" : confidenceScore >= 65 ? "MEDIUM" : "LOW"
 confidenceColor = confidenceScore >= 80 ? color.green : confidenceScore >= 65 ? color.orange : color.red
 
-// Every BUY is independent. This label permanently records that signal's own
-// Entry, Pivot R2 TP, SL, R:R and rule-based confidence snapshot.
-if validBreakout
-    signalText = "BUY" +
-      "\nEntry: " + str.tostring(close, format.mintick) +
-      "\nTP (Pivot R2): " + str.tostring(pivotR2Target, format.mintick) +
-      "\nSL: " + str.tostring(boxLow, format.mintick) +
-      "\nR:R: " + str.tostring(rewardRisk, "#.##") +
-      "\nConfidence: " + confidenceLevel + " (" + str.tostring(confidenceScore, "#") + "/100)"
-    label.new(bar_index, volume, signalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=confidenceColor, textcolor=color.white, size=size.small)
+// Supplied Supertrend v4 formula ported directly to v5 (not ta.supertrend).
+stPeriods = input.int(10, "ATR Period", minval=1, group="Supertrend")
+stSource = input.source(hl2, "Source", group="Supertrend")
+stMultiplier = input.float(3.0, "ATR Multiplier", minval=0.1, step=0.1, group="Supertrend")
+stChangeATR = input.bool(true, "Change ATR Calculation Method? (on = Wilder ATR)", group="Supertrend")
+showSetupLabels = input.bool(true, "Show BUY setup labels", group="Display")
 
-// Volume panel
-plot(volume, title="Volume", color=validBreakout ? color.lime : color.gray, style=plot.style_columns)
-plot(requiredVolume, title="Required Volume", color=color.red)
+stAtrSma = ta.sma(ta.tr, stPeriods)
+stAtr = stChangeATR ? ta.atr(stPeriods) : stAtrSma
+stUp = stSource - stMultiplier * stAtr
+stUp1 = nz(stUp[1], stUp)
+stUp := close[1] > stUp1 ? math.max(stUp, stUp1) : stUp
+stDn = stSource + stMultiplier * stAtr
+stDn1 = nz(stDn[1], stDn)
+stDn := close[1] < stDn1 ? math.min(stDn, stDn1) : stDn
+stTrend = 1
+stTrend := nz(stTrend[1], stTrend)
+stTrend := stTrend == -1 and close > stDn1 ? 1 : stTrend == 1 and close < stUp1 ? -1 : stTrend
 
-// Values available in the Data Window
-plot(boxHigh, title="Automatic NR7 Box High", display=display.data_window)
-plot(boxLow, title="Automatic NR7 Box Low / Stop", display=display.data_window)
-plot(fixedStrongHighFilter, title="Unrevisited Pivot High / Entry Filter", display=display.data_window)
-plot(classicPivot, title="Previous-Day Classic Pivot", display=display.data_window)
-plot(pivotR2Target, title="Previous-Day Pivot R2 / Target", display=display.data_window)
-plot(volumeSurge, title="Volume Surge", display=display.data_window)
-plot(closePosition, title="Close Position", display=display.data_window)
-plot(rewardRisk, title="Reward/Risk", display=display.data_window)
-plot(currentHighIsStrong ? 1 : 0, title="Strong High State", display=display.data_window)
-plot(validBreakout ? confidenceScore : na, title="Signal Confidence Score", display=display.data_window)
+// A green flip on this close OR an existing green trend both qualify.
+// Require an initialized band so startup bars cannot confirm a setup.
+stReady = not na(stAtr) and not na(stUp) and not na(stDn)
+stBuy = barstate.isconfirmed and stReady and stTrend == 1 and stTrend[1] == -1
+stSell = barstate.isconfirmed and stReady and stTrend == -1 and stTrend[1] == 1
+// Entry filters use the exact closing boundary in UTC, not bar open time.
+entryDay = dayofweek(time_close, "UTC")
+entryDayAllowed = entryDay != dayofweek.sunday and entryDay != dayofweek.monday
+stopDistancePct = close > 0 and not na(boxLow) ? 100.0 * (close - boxLow) / close : na
+stopDistanceAllowed = not na(stopDistancePct) and stopDistancePct > 0 and stopDistancePct < 2.56
+mergedBuy = validBreakout and barstate.isconfirmed and stReady and stTrend == 1 and entryDayAllowed and stopDistanceAllowed
 
-// Signal
-plotshape(validBreakout, title="Valid NR7 Pivot-R2 BUY", style=shape.triangleup, location=location.bottom, color=color.lime, size=size.small, text="BUY")
-alertcondition(validBreakout, title="Valid NR7 Pivot-R2 BUY", message="Confirmed NR7 BUY. Open the signal label for Entry, previous-day Pivot R2 TP, NR7 box-low SL, R:R and rule-based confidence.")
+// Hold the last closed-bar Supertrend display while the live bar develops.
+stDisplayTrend = barstate.isconfirmed ? stTrend : stTrend[1]
+stDisplayUp = barstate.isconfirmed ? stUp : stUp[1]
+stDisplayDn = barstate.isconfirmed ? stDn : stDn[1]
+
+// Audit values. Original volume readings stay available in the Data Window.
+plot(volume, "Volume", display=display.data_window)
+plot(requiredVolume, "Required Volume", display=display.data_window)
+plot(volumeSurge, "Volume Surge", display=display.data_window)
+plot(closePosition, "Close Position", display=display.data_window)
+plot(fixedStrongHighFilter, "Unrevisited Pivot High / Entry Filter", display=display.data_window)
+plot(currentHighIsStrong ? 1 : 0, "Strong High State", display=display.data_window)
+plot(classicPivot, "Previous-Day Classic Pivot", display=display.data_window)
+plot(pivotR2Target, "Current Previous-Day R2 (not necessarily active TP)", display=display.data_window)
+plot(rewardRisk, "Setup R:R to R2", display=display.data_window)
+plot(validBreakout ? 1 : 0, "Original NR7 BUY", display=display.data_window)
+plot(stReady ? stDisplayTrend : na, "Confirmed Supertrend Direction (+1 green / -1 red)", display=display.data_window)
+plot(mergedBuy ? 1 : 0, "Merged NR7 + Supertrend BUY", display=display.data_window)
+plot(mergedBuy ? confidenceScore : na, "Rule Score (not win probability)", display=display.data_window)
+
+var table chartNotice = table.new(position.top_right, 1, 1)
+if barstate.islast
+    table.cell(chartNotice, 0, 0, isOneHourChart ? "NR7 + ST | 1H | no Sun/Mon UTC | stop <2.56% | R2 / box-low exits" : "Use a 1-hour chart: BUY signals disabled", text_color=color.white, bgcolor=isOneHourChart ? color.new(color.green, 65) : color.red)
+
+// Store trade-specific levels ONCE, when an entry is submitted.
+var float activeTP = na
+var float activeSL = na
+var float signalEntry = na
+
+if strategy.position_size == 0 and ta.change(strategy.closedtrades) > 0
+    activeTP := na
+    activeSL := na
+    signalEntry := na
+
+enterLong = mergedBuy and strategy.position_size == 0
+if enterLong
+    activeTP := pivotR2Target
+    activeSL := boxLow
+    signalEntry := close
+    strategy.entry("NR7 Long", strategy.long, comment="NR7 + ST BUY", alert_message="NR7 + Supertrend entry filled")
+
+// Submit the bracket together with the entry; keep its original prices.
+// Stop and limit orders can fill intrabar. Supertrend NEVER closes a trade.
+if enterLong or strategy.position_size > 0
+    strategy.exit("R2 / Box Low", from_entry="NR7 Long", limit=activeTP, stop=activeSL, comment_profit="R2 TP", comment_loss="Box Low SL", alert_profit="Fixed R2 take-profit filled", alert_loss="Fixed NR7 box-low stop filled")
+
+if enterLong and showSetupLabels
+    signalText = "BUY: NR7 + Supertrend" +
+      "\nSignal close: " + str.tostring(close, format.mintick) +
+      "\nFixed TP (R2): " + str.tostring(pivotR2Target, format.mintick) +
+      "\nFixed SL (box low): " + str.tostring(boxLow, format.mintick) +
+      "\nSetup R:R: " + str.tostring(rewardRisk, "#.##") +
+      "\nSupertrend: " + (stBuy ? "new confirmed BUY" : "confirmed uptrend") +
+      "\nRule score: " + confidenceLevel + " (" + str.tostring(confidenceScore, "#") + "/100)"
+    label.new(bar_index, high, signalText, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=confidenceColor, textcolor=color.white, size=size.small)
+
+plotshape(enterLong, title="Submitted BUY", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="BUY")
+plotshape(mergedBuy and not enterLong, title="Qualifying setup while trade open (no add)", style=shape.circle, location=location.belowbar, color=color.gray, size=size.tiny)
+if enterLong
+    alert("Confirmed NR7 + Supertrend BUY | " + syminfo.ticker + " | Signal close: " + str.tostring(close, format.mintick) + " | Fixed R2: " + str.tostring(activeTP, format.mintick) + " | Fixed SL: " + str.tostring(activeSL, format.mintick), alert.freq_once_per_bar_close)

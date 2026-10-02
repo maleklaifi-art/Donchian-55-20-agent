@@ -65,19 +65,19 @@ def enter(sig, exchange, setup):
         place_signal(sig, market, exchange, {sig.symbol: rule(sig.symbol)}, state, cfg, logger)
 
 
-def test_two_90_usdt_positions_have_independent_two_usdt_risk(setup):
+def test_multiple_20_usdt_positions_have_independent_risk_and_cash_caps(setup):
     exchange = Exchange()
     enter(signal('AAAUSDT'), exchange, setup)
     enter(signal('BBBUSDT'), exchange, setup)
     cfg, _, state, _ = setup
-    assert exchange.buys == [('AAAUSDT', 90.0), ('BBBUSDT', 90.0)]
-    assert exchange.free == 20.0
+    assert exchange.buys == [('AAAUSDT', 20.0), ('BBBUSDT', 20.0)]
+    assert exchange.free == 160.0
     assert len(state['open_positions']) == len(exchange.protections) == 2
-    assert [p['risk_usdt'] for p in state['open_positions'].values()] == [2.0, 2.0]
+    assert [p['risk_usdt'] for p in state['open_positions'].values()] == pytest.approx([0.444444, 0.444444])
     assert len(state['executed_entries']) == 2
     assert load_state(cfg.state_file) == state
     enter(signal('CCCUSDT'), exchange, setup)
-    assert exchange.buys[-1][1] == pytest.approx(19.9)
+    assert exchange.buys[-1][1] == pytest.approx(20.0)
     assert sum(cost for _, cost in exchange.buys) < 200
     assert all(0 < p['risk_usdt'] <= 2 for p in state['open_positions'].values())
 
@@ -107,7 +107,7 @@ def test_duplicate_signal_and_existing_symbol_still_blocked(setup):
     assert len(exchange.buys) == 1
 
 
-@pytest.mark.parametrize('fill_price,fail_oco', [(91.0, False), (90.0, True)])
+@pytest.mark.parametrize('fill_price,fail_oco', [(96.0, False), (90.0, True)])
 def test_fill_risk_and_protection_failures_still_flatten(setup, fill_price, fail_oco):
     exchange = Exchange(fill_price=fill_price, fail_oco=fail_oco)
     enter(signal(), exchange, setup)
@@ -135,3 +135,4 @@ def test_kill_switch_and_existing_daily_loss_stop_still_apply(setup):
     state['realized'] = []
     Path(cfg.kill_switch_file).touch()
     assert not allowed_to_trade(state, cfg, logger)
+

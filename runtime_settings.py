@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import threading
@@ -11,7 +12,7 @@ from typing import Any, Dict
 
 @dataclass
 class RuntimeSettings:
-    settings_revision: int = 3
+    settings_revision: int = 4
     top_n: int = 1000
     hourly_history_bars: int = 1000
     scan_workers: int = 100
@@ -20,8 +21,11 @@ class RuntimeSettings:
     indicator_minimum_surge: float = 1.5
     minimum_close_position: float = 0.75
     swing_length: int = 50
-    minimum_reward_risk: float = 2.0
-    maximum_reward_risk: float = 4.0
+    minimum_reward_risk: float = 1.0
+    maximum_reward_risk: float = 4.0  # retained on disk only; never an active gate
+    supertrend_period: int = 10
+    supertrend_multiplier: float = 3.0
+    supertrend_wilder: bool = True
     telegram_enabled: bool = False
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
@@ -31,6 +35,8 @@ class RuntimeSettings:
         data.pop("settings_revision", None)
         data["telegram_bot_token"] = ""
         data["telegram_token_configured"] = bool(self.telegram_bot_token)
+        data.pop("maximum_reward_risk", None)
+        data.update(strategy_version="app_nr7_st_r2_box_weekday_stop256_v2", excluded_entry_days_utc=["Sunday", "Monday"], maximum_stop_distance_pct_exclusive=2.56)
         data["schedule"] = "Hourly at HH:00 UTC"
         return data
 
@@ -53,8 +59,10 @@ class SettingsStore:
                 self._value.scan_workers = 50
             if previous_revision < 3 and self._value.scan_workers == 50:
                 self._value.scan_workers = 100
-            self._value.settings_revision = 3
-            if previous_revision < 3:
+            if previous_revision < 4:
+                self._value.minimum_reward_risk = 1.0
+            self._value.settings_revision = 4
+            if previous_revision < 4:
                 self._write(self._value)
         except Exception as exc:
             raise RuntimeError(f"settings file is unreadable: {self.path}: {exc}") from exc
@@ -64,7 +72,7 @@ class SettingsStore:
         if key not in raw:
             return old
         value = int(raw[key]) if integer else float(raw[key])
-        if value < minimum or value > maximum:
+        if not math.isfinite(value) or value < minimum or value > maximum:
             raise ValueError(f"{key} must be between {minimum:g} and {maximum:g}")
         return value
 
@@ -74,15 +82,18 @@ class SettingsStore:
         value.top_n = self._number(raw, "top_n", value.top_n, 1, 1000, True)
         value.hourly_history_bars = self._number(raw, "hourly_history_bars", value.hourly_history_bars, 240, 1000, True)
         value.scan_workers = self._number(raw, "scan_workers", value.scan_workers, 1, 100, True)
-        value.app_minimum_surge = self._number(raw, "app_minimum_surge", value.app_minimum_surge, 0.1, 20.0)
+        value.app_minimum_surge = self._number(raw, "app_minimum_surge", value.app_minimum_surge, 0.0, 20.0)
         value.indicator_volume_lookback = self._number(raw, "indicator_volume_lookback", value.indicator_volume_lookback, 1, 500, True)
-        value.indicator_minimum_surge = self._number(raw, "indicator_minimum_surge", value.indicator_minimum_surge, 0.1, 20.0)
+        value.indicator_minimum_surge = self._number(raw, "indicator_minimum_surge", value.indicator_minimum_surge, 0.0, 20.0)
         value.minimum_close_position = self._number(raw, "minimum_close_position", value.minimum_close_position, 0.0, 1.0)
         value.swing_length = self._number(raw, "swing_length", value.swing_length, 10, 200, True)
         value.minimum_reward_risk = self._number(raw, "minimum_reward_risk", value.minimum_reward_risk, 0.0, 20.0)
-        value.maximum_reward_risk = self._number(raw, "maximum_reward_risk", value.maximum_reward_risk, 0.0, 20.0)
-        if value.minimum_reward_risk > value.maximum_reward_risk:
-            raise ValueError("minimum_reward_risk cannot exceed maximum_reward_risk")
+        value.supertrend_period = self._number(raw, "supertrend_period", value.supertrend_period, 1, 200, True)
+        value.supertrend_multiplier = self._number(raw, "supertrend_multiplier", value.supertrend_multiplier, 0.1, 20.0)
+        if "supertrend_wilder" in raw:
+            if not isinstance(raw["supertrend_wilder"], bool):
+                raise ValueError("supertrend_wilder must be a boolean")
+            value.supertrend_wilder = raw["supertrend_wilder"]
         if "telegram_enabled" in raw:
             value.telegram_enabled = bool(raw["telegram_enabled"])
         if "telegram_chat_id" in raw:
@@ -117,3 +128,4 @@ class SettingsStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import List, Optional, Tuple
 
 
@@ -25,8 +26,11 @@ class StrategyConfig:
     indicator_minimum_surge: float = 1.5    # >= 1.5
     minimum_close_position: float = 0.75
     pine_minimum_reward_risk: float = 1.0   # Pine confidence-score baseline
-    minimum_reward_risk: float = 2.0        # inclusive >= 2
-    maximum_reward_risk: float = 4.0        # inclusive <= 4
+    minimum_reward_risk: float = 1.0        # legacy compatibility; not an entry gate
+    maximum_reward_risk: float = 4.0        # legacy compatibility; ignored
+    supertrend_period: int = 10
+    supertrend_multiplier: float = 3.0
+    supertrend_wilder: bool = True
     swing_length: int = 50
 
 
@@ -48,6 +52,9 @@ class Signal:
     close_position: float
     confidence_score: int
     confidence_level: str
+    stop_distance_pct: float = 0.0
+    supertrend_direction: int = 1
+    strategy_version: str = "app_nr7_st_r2_box_weekday_stop256_v2"
 
     def to_dict(self):
         return asdict(self)
@@ -148,7 +155,7 @@ def latest_prior_nr7_box(hourly: List[Candle], signal_index: int) -> Optional[Tu
     """Latest NR7 from a PRIOR completed UTC day, matching the app/Pine state."""
     sig_day = _utc_day(hourly[signal_index].open_time)
     prior_hourly = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
-    daily = build_daily(prior_hourly)
+    daily = [d for d in build_daily(prior_hourly) if d.open_time % 86_400_000 == 0 and d.close_time - d.open_time == 86_400_000 - 1]
     if len(daily) < 7:
         return None
     box = None
@@ -163,7 +170,7 @@ def previous_completed_daily(hourly: List[Candle], signal_index: int) -> Optiona
     """Immediately previous completed UTC daily candle for Classic Pivot R2."""
     sig_day = _utc_day(hourly[signal_index].open_time)
     prior_hourly = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
-    daily = build_daily(prior_hourly)
+    daily = [d for d in build_daily(prior_hourly) if d.open_time % 86_400_000 == 0 and d.close_time - d.open_time == 86_400_000 - 1]
     return daily[-1] if daily else None
 
 
@@ -175,7 +182,7 @@ def app_volume_surge(hourly: List[Candle], signal_index: int) -> Optional[float]
         if _utc_day(x.open_time) == sig_day
     )
     prior = [x for x in hourly[: signal_index + 1] if _utc_day(x.open_time) < sig_day]
-    daily = build_daily(prior)
+    daily = [d for d in build_daily(prior) if d.open_time % 86_400_000 == 0 and d.close_time - d.open_time == 86_400_000 - 1]
     if len(daily) < 8:
         return None
     baseline = sum(x.quote_volume for x in daily[-8:]) / 8.0
@@ -227,6 +234,7 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
             if not (i > bar and c.high >= lvl)
         ]
 
+        previous_high, previous_low = current_swing_high, current_swing_low
         previous_leg = swing_leg
         new_leg_high = False
         new_leg_low = False
@@ -257,10 +265,10 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
 
         if i > 0:
             pc = candles[i - 1].close
-            if current_swing_high is not None and _crossover(pc, c.close, current_swing_high) and not swing_high_crossed:
+            if current_swing_high is not None and (previous_high is not None and pc <= previous_high and c.close > current_swing_high) and not swing_high_crossed:
                 swing_high_crossed = True
                 swing_trend = 1
-            if current_swing_low is not None and _crossunder(pc, c.close, current_swing_low) and not swing_low_crossed:
+            if current_swing_low is not None and (previous_low is not None and pc >= previous_low and c.close < current_swing_low) and not swing_low_crossed:
                 swing_low_crossed = True
                 swing_trend = -1
 
@@ -275,7 +283,8 @@ def strong_pivot_state(candles: List[Candle], swing_length: int):
 
 
 def _confidence(indicator_surge: float, close_position: float, rr: float, cfg: StrategyConfig):
-    volume_strength = min(max((indicator_surge - cfg.indicator_minimum_surge) / cfg.indicator_minimum_surge, 0.0), 1.0)
+    volume_strength = (min(max((indicator_surge - cfg.indicator_minimum_surge) / cfg.indicator_minimum_surge, 0.0), 1.0)
+                       if cfg.indicator_minimum_surge > 0 else 0.0)
     close_room = 1.0 - cfg.minimum_close_position
     close_strength = 1.0 if close_room <= 0 else min(max((close_position - cfg.minimum_close_position) / close_room, 0.0), 1.0)
     rr_strength = min(max((rr - cfg.pine_minimum_reward_risk) / 2.0, 0.0), 1.0)
@@ -285,9 +294,59 @@ def _confidence(indicator_surge: float, close_position: float, rr: float, cfg: S
     return score, level
 
 
-def reward_risk_is_accepted(rr: float, minimum: float = 2.0, maximum: float = 4.0) -> bool:
-    """Final mobile-parity R:R gate. Both 2.00 and 4.00 are accepted."""
-    return minimum <= rr <= maximum
+def reward_risk_is_accepted(rr: float, minimum: float = 1.0, maximum=None) -> bool:
+    """Pine uses a strict lower bound and has no upper R:R bound.
+
+    maximum is accepted only for callers of the old API; it is ignored.
+    """
+    return math.isfinite(rr) and rr > minimum
+
+
+def entry_day_allowed(signal_close_ms: int) -> bool:
+    # Binance closeTime is inclusive (...59.999); Pine time_close is the next
+    # exact boundary. Sunday 23:00's candle therefore closes on Monday.
+    return datetime.fromtimestamp((signal_close_ms + 1) / 1000, timezone.utc).weekday() not in (0, 6)
+
+
+def stop_distance_allowed(entry: float, stop: float) -> bool:
+    if not (math.isfinite(entry) and math.isfinite(stop) and entry > 0):
+        return False
+    distance = (Decimal(str(entry)) - Decimal(str(stop))) / Decimal(str(entry)) * 100
+    return Decimal(0) < distance < Decimal("2.56")
+
+
+def supertrend_state(candles: List[Candle], period=10, multiplier=3.0, wilder=True):
+    """Supplied Pine's custom hl2 Supertrend, not a library variant.
+
+    Wilder ATR seeds with SMA of the first period true ranges (first TR=H-L).
+    SMA alternative matches ta.sma(ta.tr, period), whose first TR is na.
+    Each result is None before initialized, then +1 (green) or -1 (red).
+    """
+    out, ranges = [], []
+    atr = up = down = None
+    trend = 1
+    for i, bar in enumerate(candles):
+        tr = bar.high - bar.low if i == 0 else max(bar.high - bar.low, abs(bar.high - candles[i-1].close), abs(bar.low - candles[i-1].close))
+        if wilder or i > 0:
+            ranges.append(tr)
+        if len(ranges) < period:
+            out.append(None)
+            continue
+        atr = ((atr * (period - 1) + tr) / period if wilder and atr is not None
+               else sum(ranges[-period:]) / period)
+        source = (bar.high + bar.low) / 2
+        next_up, next_down = source - multiplier * atr, source + multiplier * atr
+        old_up = next_up if up is None else up
+        old_down = next_down if down is None else down
+        pc = candles[i-1].close if i else bar.close
+        up = max(next_up, old_up) if pc > old_up else next_up
+        down = min(next_down, old_down) if pc < old_down else next_down
+        if trend == -1 and bar.close > old_down:
+            trend = 1
+        elif trend == 1 and bar.close < old_up:
+            trend = -1
+        out.append(trend)
+    return out
 
 
 def latest_nr7_box_from_daily(daily: List[Candle], signal_day: int, now_ms: int) -> Optional[Tuple[float, float]]:
@@ -345,6 +404,16 @@ def evaluate_latest_detailed(
             or p.close_time != c.open_time - 1):
         return reject("Data", "Missing or malformed consecutive 1H candles")
 
+    for j, bar in enumerate(hourly):
+        values = (bar.open, bar.high, bar.low, bar.close, bar.volume, bar.quote_volume)
+        if (not all(math.isfinite(v) for v in values) or min(values[:4]) <= 0
+                or bar.high < max(bar.open, bar.close) or bar.low > min(bar.open, bar.close)
+                or min(bar.volume, bar.quote_volume) < 0
+                or bar.open_time % 3_600_000 != 0
+                or bar.close_time != bar.open_time + 3_600_000 - 1
+                or (j and bar.open_time != hourly[j-1].open_time + 3_600_000)):
+            return reject("Data", "Invalid or non-consecutive 1H warmup data")
+
     box = box_override or latest_prior_nr7_box(hourly, i)
     if box is None:
         return reject("NR7", "No completed prior UTC-day NR7 box in the fast history window")
@@ -359,9 +428,10 @@ def evaluate_latest_detailed(
 
     # APP CONDITIONS.
     app_surge = app_volume_surge(hourly, i)
-    if app_surge is None:
+    if app_surge is None and cfg.app_minimum_surge > 0:
         return reject("App Volume", "Insufficient prior daily quote-volume baseline")
-    if not (app_surge > cfg.app_minimum_surge):
+    app_surge = app_surge if app_surge is not None else 0.0
+    if cfg.app_minimum_surge > 0 and not (app_surge > cfg.app_minimum_surge):
         return reject(
             "App Volume",
             f"{app_surge:.4f}x is not strictly > {cfg.app_minimum_surge:g}x",
@@ -387,9 +457,9 @@ def evaluate_latest_detailed(
     if len(prior_volumes) != cfg.indicator_volume_lookback:
         return reject("Indicator Volume", "Incomplete hourly volume lookback", phase_one)
     avg_vol = sum(prior_volumes) / len(prior_volumes)
-    if avg_vol <= 0:
+    if avg_vol <= 0 and cfg.indicator_minimum_surge > 0:
         return reject("Indicator Volume", "Prior hourly average volume is zero", phase_one)
-    indicator_surge = c.volume / avg_vol
+    indicator_surge = c.volume / avg_vol if avg_vol > 0 else 0.0
     if indicator_surge < cfg.indicator_minimum_surge:
         return reject(
             "Indicator Volume",
@@ -443,15 +513,23 @@ def evaluate_latest_detailed(
     if risk <= 0 or reward <= 0:
         return reject("R:R", "Non-positive risk or reward", phase_one, indicator_surge, close_position)
     rr = reward / risk
-    if not reward_risk_is_accepted(rr, cfg.minimum_reward_risk, cfg.maximum_reward_risk):
+    if not reward_risk_is_accepted(rr, cfg.pine_minimum_reward_risk):
         return reject(
             "R:R",
-            f"{rr:.4f} is outside inclusive [{cfg.minimum_reward_risk:g}, {cfg.maximum_reward_risk:g}]",
+            f"{rr:.4f} must be strictly > {cfg.pine_minimum_reward_risk:g} (no upper limit)",
             phase_one,
             indicator_surge,
             close_position,
             rr,
         )
+
+    if not entry_day_allowed(c.close_time):
+        return reject("Entry Weekday", "Sunday/Monday entries excluded at UTC candle close", phase_one, indicator_surge, close_position, rr)
+    if not stop_distance_allowed(c.close, box_low):
+        return reject("Stop Distance", "Signal-close stop distance must be > 0 and strictly < 2.56%", phase_one, indicator_surge, close_position, rr)
+    st_direction = supertrend_state(hourly, cfg.supertrend_period, cfg.supertrend_multiplier, cfg.supertrend_wilder)[i]
+    if st_direction != 1:
+        return reject("Supertrend", "Confirmed Supertrend must be initialized and green", phase_one, indicator_surge, close_position, rr)
 
     score, level = _confidence(indicator_surge, close_position, rr, cfg)
     signal = Signal(
@@ -471,6 +549,8 @@ def evaluate_latest_detailed(
         close_position=close_position,
         confidence_score=score,
         confidence_level=level,
+        stop_distance_pct=(c.close - box_low) / c.close * 100,
+        supertrend_direction=st_direction,
     )
     return Evaluation(symbol, price, phase_one, signal)
 
@@ -478,3 +558,4 @@ def evaluate_latest_detailed(
 def evaluate_latest(symbol: str, hourly: List[Candle], cfg: StrategyConfig, now_ms: int) -> Optional[Signal]:
     """Compatibility wrapper used by the CLI and existing tests."""
     return evaluate_latest_detailed(symbol, hourly, cfg, now_ms).signal
+
