@@ -13,6 +13,7 @@ from typing import Any, Dict
 @dataclass
 class RuntimeSettings:
     settings_revision: int = 4
+    starting_capital_usdt: float = 200.0
     top_n: int = 1000
     hourly_history_bars: int = 1000
     scan_workers: int = 100
@@ -42,10 +43,10 @@ class RuntimeSettings:
 
 
 class SettingsStore:
-    def __init__(self, path: str):
+    def __init__(self, path: str, starting_capital_usdt: float = 200.0):
         self.path = Path(path)
         self._lock = threading.RLock()
-        self._value = RuntimeSettings()
+        self._value = RuntimeSettings(starting_capital_usdt=starting_capital_usdt)
         self._load()
 
     def _load(self):
@@ -78,6 +79,14 @@ class SettingsStore:
 
     def _validated(self, raw: Dict[str, Any], old: RuntimeSettings) -> RuntimeSettings:
         value = RuntimeSettings(**asdict(old))
+        if "starting_capital_usdt" in raw:
+            capital = raw["starting_capital_usdt"]
+            if isinstance(capital, bool):
+                raise ValueError("starting_capital_usdt must be a positive finite amount")
+            capital = float(capital)
+            if not math.isfinite(capital) or capital <= 0:
+                raise ValueError("starting_capital_usdt must be a positive finite amount")
+            value.starting_capital_usdt = capital
         value.settings_revision = int(raw.get("settings_revision", value.settings_revision))
         value.top_n = self._number(raw, "top_n", value.top_n, 1, 1000, True)
         value.hourly_history_bars = self._number(raw, "hourly_history_bars", value.hourly_history_bars, 240, 1000, True)

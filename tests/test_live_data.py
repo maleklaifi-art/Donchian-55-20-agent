@@ -85,6 +85,16 @@ def test_no_ticker_fallback_when_exchange_info_fails():
     assert get.call_count == 1
 
 
+def test_stablecoin_exclusions_apply_before_volume_ranking():
+    symbols = sorted(demo_trader.EXCLUDED_SYMBOLS) + ['BTCUSDT', 'ETHUSDT']
+    info = {'symbols': [dict(symbol=s, status='TRADING', isSpotTradingAllowed=True,
+                             quoteAsset='USDT') for s in symbols]}
+    tickers = [dict(symbol=s, quoteVolume=10000-i) for i, s in enumerate(symbols)]
+    client = PublicMarketClient(1)
+    with patch.object(client, 'get', side_effect=[info, tickers]):
+        assert client.symbols('USDT', 2) == ['BTCUSDT', 'ETHUSDT']
+
+
 def test_stale_scan_retained_as_data_failure_without_alert_or_daily_fallback(tmp_path):
     market = Mock()
     market.symbols.return_value = ["EOSUSDT"]

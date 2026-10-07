@@ -36,6 +36,13 @@ from exit_monitor import monitor_production_exit
 
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
+MAX_TRADE_RISK_USDT = 2.0
+MAX_POSITION_NOTIONAL_USDT = 100.0
+# User-specified stablecoin/fiat pairs. Exact matches avoid excluding unrelated coins.
+EXCLUDED_SYMBOLS = frozenset({
+    "BFUSDUSDT", "EURIUSDT", "EURUSDT", "USD1USDT", "USDEUSDT", "XUSDUSDT",
+    "FDUSDUSDT", "USDCUSDT", "TUSDUSDT", "USDPUSDT", "AEURUSDT", "RLUSDUSDT", "UUSDT",
+})
 
 
 @dataclass
@@ -49,9 +56,9 @@ class BotConfig:
     risk_per_trade_usdt: float = 2.0
     daily_loss_limit_r: float = 3.0
     max_position_notional_pct: float = 100.0
-    max_position_notional_usdt: float = 20.0
+    max_position_notional_usdt: float = MAX_POSITION_NOTIONAL_USDT
     max_entry_drift_pct: float = 0.30
-    demo_equity_cap_usdt: float = 200.0
+    demo_equity_cap_usdt: float = 200.0  # funded capital; balance also includes realized P&L
 
     # API / runtime.
     request_timeout_s: int = 15
@@ -144,6 +151,7 @@ class PublicMarketClient:
             if item.get("status") == "TRADING"
             and item.get("isSpotTradingAllowed") is True
             and item.get("quoteAsset") == quote_asset.upper()
+            and item["symbol"] not in EXCLUDED_SYMBOLS
         }
         tickers = self.get("/api/v3/ticker/24hr")
         suffix = quote_asset.upper()
@@ -656,6 +664,20 @@ def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
     return True
 
 
+def demo_balance_usdt(cfg: BotConfig, state: dict, realized_pnl_usdt=None) -> float:
+    """Ledger balance, before fees: funded capital plus recorded closed P&L.
+
+    Cloud execution supplies the durable database aggregate. Standalone use
+    falls back to its state ledger. Open P&L does not fund new entries.
+    """
+    if realized_pnl_usdt is None:
+        realized_pnl_usdt = sum(float(r.get("pnl_usdt") or 0) for r in state.get("realized", []))
+    balance = float(cfg.demo_equity_cap_usdt) + float(realized_pnl_usdt)
+    if not math.isfinite(balance):
+        raise ValueError("Demo balance must be finite")
+    return balance
+
+
 def place_signal(
     sig: Signal,
     market: PublicMarketClient,
@@ -666,8 +688,12 @@ def place_signal(
     logger: EventLogger,
     minimum_reward_risk: float = 1.0,
     maximum_reward_risk: float = 4.0,
+    realized_pnl_usdt=None,
 ):
     key = signal_key(sig)
+    if sig.symbol.upper() in EXCLUDED_SYMBOLS:
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="excluded stablecoin/fiat symbol")
+        return
     if not is_current_signal_close(sig.signal_close_ms, int(time.time() * 1000)):
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale signal candle")
         return
@@ -701,10 +727,11 @@ def place_signal(
         float(p.get("entry_price", 0)) * float(p.get("quantity", 0))
         for p in state.get("open_positions", {}).values()
     )
-    # Keep risk percentages anchored to the configured demo bankroll rather than
-    # shrinking them merely because some USDT is currently deployed in open positions.
-    equity = min(usdt_free + open_notional, cfg.demo_equity_cap_usdt)
-    available_quote = min(usdt_free, max(0.0, cfg.demo_equity_cap_usdt - open_notional))
+    # Realized profits/losses change the funded bankroll. Existing commitments
+    # remain reserved, and orders cannot spend more than actual Testnet cash.
+    balance = demo_balance_usdt(cfg, state, realized_pnl_usdt)
+    equity = min(usdt_free + open_notional, balance)
+    available_quote = min(usdt_free, max(0.0, balance - open_notional))
     if equity <= 0 or available_quote <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no free demo quote balance", signal_key=key)
         return
@@ -727,14 +754,15 @@ def place_signal(
         )
         return
 
-    risk_budget = min(2.0, cfg.risk_per_trade_usdt, equity)
+    risk_budget = min(MAX_TRADE_RISK_USDT, cfg.risk_per_trade_usdt, equity)
     if risk_budget <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no per-trade risk budget", signal_key=key)
         return
 
     stop_distance = live_ask - sig.sl
     qty_by_risk = risk_budget / stop_distance
-    max_notional = min(cfg.max_position_notional_usdt, equity * cfg.max_position_notional_pct / 100.0)
+    max_notional = min(MAX_POSITION_NOTIONAL_USDT, cfg.max_position_notional_usdt,
+                       equity * cfg.max_position_notional_pct / 100.0)
     qty_by_notional = max_notional / live_ask
     qty = min(qty_by_risk, qty_by_notional)
     quote_notional = qty * live_ask
