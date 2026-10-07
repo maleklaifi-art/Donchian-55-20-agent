@@ -85,9 +85,9 @@ Boundary examples: RR=1 fails; RR=4 and RR=10 may pass. Entry 100/stop 97.44 is 
 
 ## 6. Capital and operational controls
 
-Use the agreed $200 demo bankroll cap, $20 maximum position notional, and $2 maximum planned price-to-stop risk per trade. Keep one open position per symbol; allow multiple symbols while available demo balance permits. Do not add a one-position-global or one-trade-per-day rule.
+Use the agreed $200 demo bankroll cap, $100 maximum position notional, and $2 maximum planned price-to-stop risk per trade. Keep one open position per symbol; allow multiple symbols while available demo balance permits. Do not add a one-position-global or one-trade-per-day rule.
 
-The execution code sizes using the live ask and minimum of risk sizing, $20 notional cap, the existing percentage cap, and available quote balance with its existing 0.5% buffer. It floors protective quantity to the exchange lot step and rounds TP/SL to the nearest exchange tick. It subtracts entry base-asset commission from the quantity available to protect. It rechecks the strict Pine R:R lower bound and absolute planned risk after the Testnet fill; invalid exposure is emergency-flattened by the existing safety path.
+The execution code sizes using the live ask and minimum of risk sizing, $100 notional cap, the existing percentage cap, and available quote balance with its existing 0.5% buffer. It floors protective quantity to the exchange lot step and rounds TP/SL to the nearest exchange tick. It subtracts entry base-asset commission from the quantity available to protect. It rechecks the strict Pine R:R lower bound and absolute planned risk after the Testnet fill; invalid exposure is emergency-flattened by the existing safety path.
 
 Retained execution controls include the 0.30% maximum upward entry drift, Testnet availability/minimum-order constraints, the -3R daily new-entry cutoff, and STOP NEW TRADES. These operational controls can reject a Pine signal. The $2 figure is planned entry-to-stop price risk, not a guaranteed maximum realized loss or a fee-inclusive promise. Gaps, costs and different Testnet fills can change losses.
 
@@ -128,7 +128,7 @@ Do not claim the incident was conclusively diagnosed without this evidence. The 
 |---|---|
 | `strategy.py` | App layer, exact Pine calculations, ST confirmation and both new entry filters. |
 | `runtime_settings.py` | Zero-safe settings, revision migration and public settings metadata. |
-| `demo_trader.py` | Existing Testnet client and execution flow, $20 sizing, integration of exits and fill-based realized R. |
+| `demo_trader.py` | Existing Testnet client and execution flow, $100 sizing, integration of exits and fill-based realized R. |
 | `exit_monitor.py` | Production trade cursor, latched exit intent, cancellation/race/partial-fill reconciliation. |
 | `cloud_app.py` | Pass runtime settings and market/rules into scanner/monitor; retain auth/API/Telegram behavior. |
 | `database.py` | Recover a saved close even when DB row already exists; classify wins/losses by P&L. |
@@ -149,7 +149,7 @@ TradingView compilation and bar-by-bar parity against an exported TradingView si
 
 - Binance Spot REST API, aggregate trades, order queries, OCO and cancellation: https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md
 - TradingView time and time zones: https://www.tradingview.com/pine-script-docs/concepts/time/
-- User-supplied source: `startegy pine script.txt`. The reference below is derived from that attachment. Its original strategy header uses $10,000 and 10% equity per chart; it does **not** simulate the agent's shared $200/$20/$2 portfolio or the separate App layer.
+- User-supplied source: `startegy pine script.txt`. The reference below is derived from that attachment. Its original strategy header uses $10,000 and 10% equity per chart; it does **not** simulate the agent's shared $200/$100/$2 portfolio or the separate App layer.
 
 ## 12. Complete Pine reference (Pine layer only)
 
@@ -166,7 +166,7 @@ strategy("NR7 + Supertrend | Weekday & Stop 2.56 [Strategy v2]", overlay=true, m
 // 10% equity per trade by default. These are assumptions, not measured costs.
 // One position per chart symbol, no pyramiding, no daily trade limit.
 // Agent reference: Pine signal/exit layer ONLY; the separate App filter is in strategy.py.
-// Header sizing is the original per-chart simulation, NOT the agent's $200/$20/$2 shared portfolio.
+// Header sizing is the original per-chart simulation, NOT the agent's $200/$100/$2 shared portfolio.
 // Agent uses Testnet trigger-to-market protection; Pine uses simulated limit TP/stop.
 // Minimum Volume Surge=0 disables only this Pine volume gate; no division by zero.
 

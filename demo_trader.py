@@ -36,6 +36,13 @@ from exit_monitor import monitor_production_exit
 
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
+MAX_TRADE_RISK_USDT = 2.0
+MAX_POSITION_NOTIONAL_USDT = 100.0
+# User-specified stablecoin/fiat pairs. Exact matches avoid excluding unrelated coins.
+EXCLUDED_SYMBOLS = frozenset({
+    "BFUSDUSDT", "EURIUSDT", "EURUSDT", "USD1USDT", "USDEUSDT", "XUSDUSDT",
+    "FDUSDUSDT", "USDCUSDT", "TUSDUSDT", "USDPUSDT", "AEURUSDT", "RLUSDUSDT", "UUSDT",
+})
 
 
 @dataclass
@@ -49,7 +56,7 @@ class BotConfig:
     risk_per_trade_usdt: float = 2.0
     daily_loss_limit_r: float = 3.0
     max_position_notional_pct: float = 100.0
-    max_position_notional_usdt: float = 20.0
+    max_position_notional_usdt: float = MAX_POSITION_NOTIONAL_USDT
     max_entry_drift_pct: float = 0.30
     demo_equity_cap_usdt: float = 200.0
 
@@ -144,6 +151,7 @@ class PublicMarketClient:
             if item.get("status") == "TRADING"
             and item.get("isSpotTradingAllowed") is True
             and item.get("quoteAsset") == quote_asset.upper()
+            and item["symbol"] not in EXCLUDED_SYMBOLS
         }
         tickers = self.get("/api/v3/ticker/24hr")
         suffix = quote_asset.upper()
@@ -668,6 +676,9 @@ def place_signal(
     maximum_reward_risk: float = 4.0,
 ):
     key = signal_key(sig)
+    if sig.symbol.upper() in EXCLUDED_SYMBOLS:
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="excluded stablecoin/fiat symbol")
+        return
     if not is_current_signal_close(sig.signal_close_ms, int(time.time() * 1000)):
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale signal candle")
         return
@@ -727,14 +738,15 @@ def place_signal(
         )
         return
 
-    risk_budget = min(2.0, cfg.risk_per_trade_usdt, equity)
+    risk_budget = min(MAX_TRADE_RISK_USDT, cfg.risk_per_trade_usdt, equity)
     if risk_budget <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no per-trade risk budget", signal_key=key)
         return
 
     stop_distance = live_ask - sig.sl
     qty_by_risk = risk_budget / stop_distance
-    max_notional = min(cfg.max_position_notional_usdt, equity * cfg.max_position_notional_pct / 100.0)
+    max_notional = min(MAX_POSITION_NOTIONAL_USDT, cfg.max_position_notional_usdt,
+                       equity * cfg.max_position_notional_pct / 100.0)
     qty_by_notional = max_notional / live_ask
     qty = min(qty_by_risk, qty_by_notional)
     quote_notional = qty * live_ask

@@ -1,5 +1,8 @@
 name: Live data regression checks
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - fix/per-trade-risk-20260928
@@ -20,3 +23,5 @@ jobs:
           .venv/bin/python -m pip install -r requirements.txt pytest==8.3.5
       - name: Run regression tests without live exchange access
         run: .venv/bin/python -m pytest -q
+      - name: Verify dashboard rendering offline
+        run: node tests/check_dashboard_render.cjs

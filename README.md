@@ -28,7 +28,7 @@ Saved settings remain editable. Revision 4 replaces the old inclusive RR interva
 - The $2 risk cap applies separately to each position; combined open risk may exceed $2.
 - Daily loss cutoff: **-3R**; new trades stop for the rest of the UTC day.
 - No leverage.
-- Maximum position notional: **$20 USDT**, subject to available balance and exchange minimums.
+- Maximum position notional: **$100 USDT**, subject to available balance and exchange minimums.
 - Maximum entry drift from signal close: 0.30% by default.
 - Same symbol cannot have a second open position.
 - The same signal cannot be submitted twice.
@@ -144,3 +144,11 @@ Exchange-hosted Testnet OCO protection remains active. The monitor also reads ch
 
 If `DASHBOARD_PASSWORD` is missing, the service uses `demo-change-me` and displays a red security warning. Do not expose a deployment publicly with that default.
 
+
+## October 2026 execution and display update
+
+Position quantity = min($2 / (live ask - stop), $100 / live ask), further limited by configured lower caps and available demo cash. The existing $200 total demo bankroll and exchange minimums still apply. The $2 limit is planned price-to-stop risk; fees, gaps and slippage can make realized losses larger. Existing positions keep their quantity and protective exits.
+
+The scan and new-order gate exclude these exact pairs: `BFUSDUSDT`, `EURIUSDT`, `EURUSDT`, `USD1USDT`, `USDEUSDT`, `XUSDUSDT`, `FDUSDUSDT`, `USDCUSDT`, `TUSDUSDT`, `USDPUSDT`, `AEURUSDT`, `RLUSDUSDT`, `UUSDT`. Existing holdings and trade history are retained.
+
+Open cards label **R:R (signal)** using the same saved signal as Passed. Actual fill prices still drive P&L and execution risk; the tooltip shows fill R:R. If the saved signal is unavailable, the card explicitly labels its fallback **R:R (fill)**. Closed records are not rewritten by restart backfill.

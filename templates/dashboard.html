@@ -111,9 +111,9 @@
     root.innerHTML=rows.map(t=>`<article class="trade">
       <div class="trade-top"><div><div class="symbol">${esc(t.symbol)}</div><div class="mono" style="font-size:10px;color:#64748b;margin-top:3px">${esc(t.signal_key)}</div></div><span class="status open">OPEN</span></div>
       <div class="kv">
-        <div><span>Entry</span><b>${num(t.entry_price,8)}</b></div><div><span>Current</span><b>${num(t.current_price,8)}</b></div>
+        <div><span>Entry (fill)</span><b>${num(t.entry_price,8)}</b></div><div><span>Current</span><b>${num(t.current_price,8)}</b></div>
         <div><span>TP (Pivot R2)</span><b>${num(t.tp,8)}</b></div><div><span>SL</span><b>${num(t.sl,8)}</b></div>
-        <div><span>R:R</span><b>${num(t.rr,2)}</b></div><div><span>Risk</span><b>${money(t.risk_usdt)}</b></div>
+        <div title="${t.signal_rr != null ? 'Accepted signal R:R, matching Passed. Actual fill R:R: '+num(t.rr,2) : 'Original signal unavailable; showing actual fill R:R.'}"><span>R:R (${t.signal_rr != null ? 'signal' : 'fill'})</span><b>${num(t.signal_rr ?? t.rr,2)}</b></div><div><span>Risk</span><b>${money(t.risk_usdt)}</b></div>
         <div><span>Quantity</span><b>${num(t.quantity,8)}</b></div><div><span>Opened</span><b>${date(t.opened_at)}</b></div>
       </div>
       <div class="pnl ${cls(t.unrealized_pnl_usdt)}">${money(t.unrealized_pnl_usdt)} <span style="font-size:12px">(${pct(t.unrealized_pct)})</span></div>

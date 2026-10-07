@@ -173,6 +173,7 @@ class TradeDatabase:
                     symbol=excluded.symbol,status='OPEN',entry_price=excluded.entry_price,current_price=excluded.current_price,
                     quantity=excluded.quantity,tp=excluded.tp,sl=excluded.sl,rr=excluded.rr,risk_usdt=excluded.risk_usdt,
                     opened_at=excluded.opened_at,payload_json=excluded.payload_json
+                WHERE trades.status != 'CLOSED'
                 """,
                 (
                     sk, payload.get("symbol"), "OPEN", None, self._f(payload.get("entry_price")),
@@ -181,7 +182,9 @@ class TradeDatabase:
                     None, None, None, payload.get("opened_at"), None, json.dumps(payload, default=str),
                 ),
             )
-            c.execute("UPDATE signals SET status='TRADED', reason=NULL, updated_at=? WHERE signal_key=?", (self._now(), sk))
+            c.execute("""UPDATE signals SET status='TRADED', reason=NULL, updated_at=? WHERE signal_key=?
+                         AND EXISTS (SELECT 1 FROM trades WHERE trades.signal_key=signals.signal_key AND trades.status='OPEN')""",
+                      (self._now(), sk))
 
     def close_trade(self, payload: Dict[str, Any]):
         sk = str(payload["signal_key"])
@@ -217,7 +220,11 @@ class TradeDatabase:
             if not sk:
                 continue
             with self._lock, self._connect() as c:
-                exists = c.execute("SELECT 1 FROM trades WHERE signal_key=?", (sk,)).fetchone()
+                exists = c.execute("SELECT status FROM trades WHERE signal_key=?", (sk,)).fetchone()
+                # Already recorded history is authoritative; restart backfill
+                # must not overwrite it with a stale or partial state record.
+                if exists and exists["status"] == "CLOSED":
+                    continue
                 if not exists:
                     c.execute(
                         """INSERT INTO trades(signal_key,symbol,status,outcome,entry_price,current_price,exit_price,quantity,tp,sl,rr,
@@ -239,7 +246,7 @@ class TradeDatabase:
             rows = c.execute(
                 """
                 SELECT t.*, s.classic_pivot,s.strong_high_filter,s.app_volume_surge,s.indicator_volume_surge,s.close_position,s.confidence_score,s.confidence_level,
-                       s.entry AS signal_entry
+                       s.entry AS signal_entry, s.rr AS signal_rr
                 FROM trades t LEFT JOIN signals s ON s.signal_key=t.signal_key
                 WHERE t.status='OPEN' ORDER BY t.opened_at DESC
                 """

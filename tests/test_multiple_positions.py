@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-from demo_trader import (BotConfig, SymbolRules, allowed_to_trade, initial_state,
+from demo_trader import (BotConfig, EXCLUDED_SYMBOLS, SymbolRules, allowed_to_trade, initial_state,
                          load_config, load_state, place_signal, today_utc)
 from strategy import Signal
 
@@ -65,21 +65,43 @@ def enter(sig, exchange, setup):
         place_signal(sig, market, exchange, {sig.symbol: rule(sig.symbol)}, state, cfg, logger)
 
 
-def test_multiple_20_usdt_positions_have_independent_risk_and_cash_caps(setup):
+def test_multiple_risk_sized_positions_have_independent_risk_and_cash_caps(setup):
     exchange = Exchange()
     enter(signal('AAAUSDT'), exchange, setup)
     enter(signal('BBBUSDT'), exchange, setup)
     cfg, _, state, _ = setup
-    assert exchange.buys == [('AAAUSDT', 20.0), ('BBBUSDT', 20.0)]
-    assert exchange.free == 160.0
+    assert exchange.buys == [('AAAUSDT', 90.0), ('BBBUSDT', 90.0)]
+    assert exchange.free == 20.0
     assert len(state['open_positions']) == len(exchange.protections) == 2
-    assert [p['risk_usdt'] for p in state['open_positions'].values()] == pytest.approx([0.444444, 0.444444])
+    assert [p['risk_usdt'] for p in state['open_positions'].values()] == pytest.approx([2.0, 2.0])
     assert len(state['executed_entries']) == 2
     assert load_state(cfg.state_file) == state
     enter(signal('CCCUSDT'), exchange, setup)
-    assert exchange.buys[-1][1] == pytest.approx(20.0)
+    assert exchange.buys[-1][1] == pytest.approx(19.9)
     assert sum(cost for _, cost in exchange.buys) < 200
     assert all(0 < p['risk_usdt'] <= 2 for p in state['open_positions'].values())
+
+
+@pytest.mark.parametrize('sl,cap,expected', [(89, 100, 100), (88, 100, 90),
+                                           (89, 10000, 100), (89, 25, 25)])
+def test_risk_sizing_and_absolute_notional_ceiling(setup, sl, cap, expected):
+    setup[0].max_position_notional_usdt = cap
+    exchange = Exchange()
+    enter(signal(sl=sl), exchange, setup)
+    assert exchange.buys == [('AAAUSDT', expected)]
+    assert 0 < setup[2]['open_positions']['AAAUSDT']['risk_usdt'] <= 2
+
+
+@pytest.mark.parametrize('symbol', sorted(EXCLUDED_SYMBOLS))
+def test_excluded_queued_signal_cannot_submit_or_touch_existing_state(setup, symbol):
+    from copy import deepcopy
+    setup[2]['realized'] = [{'signal_key': 'old', 'pnl_usdt': 7}]
+    before = deepcopy(setup[2])
+    exchange = Exchange()
+    enter(signal(symbol), exchange, setup)
+    assert not exchange.buys and not exchange.sells
+    setup[1].best_ask.assert_not_called()
+    assert setup[2] == before
 
 
 @pytest.mark.parametrize('free,open_cost', [(10000, 190), (7, 90)])

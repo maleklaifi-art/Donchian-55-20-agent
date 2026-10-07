@@ -17,6 +17,8 @@ from urllib.parse import parse_qs
 from database import TradeDatabase
 from demo_trader import (
     BotConfig,
+    MAX_POSITION_NOTIONAL_USDT,
+    MAX_TRADE_RISK_USDT,
     EventLogger,
     PublicMarketClient,
     StrategyConfig,
@@ -362,8 +364,8 @@ class CloudDemoEngine:
         return {
             "meta": meta,
             "risk": {
-                "risk_per_trade_usdt": min(2.0, self.cfg.risk_per_trade_usdt),
-                "max_position_notional_usdt": self.cfg.max_position_notional_usdt,
+                "risk_per_trade_usdt": min(MAX_TRADE_RISK_USDT, self.cfg.risk_per_trade_usdt),
+                "max_position_notional_usdt": min(MAX_POSITION_NOTIONAL_USDT, self.cfg.max_position_notional_usdt),
                 "max_open_positions": None,
                 "max_trades_per_utc_day": None,
                 "max_total_open_risk_usdt": None,
