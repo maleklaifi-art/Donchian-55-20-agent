@@ -41,8 +41,12 @@ class Exchange:
 @pytest.fixture
 def context(tmp_path):
     cfg = BotConfig(state_file=str(tmp_path/'state.json'), kill_switch_file=str(tmp_path/'STOP'))
-    pos = Position('DUSKUSDT','DUSKUSDT:1',1,'entry',100,2,120,98,10,4,
-                   '1970-01-01T00:00:01+00:00',5,'list',10,11)
+    # Legacy pre-cutover position that still carries OCO protective orders.
+    pos = Position(symbol='DUSKUSDT', signal_key='DUSKUSDT:1', entry_order_id=1,
+                   entry_client_order_id='entry', entry_price=100, quantity=2,
+                   risk_usdt=4, opened_at='1970-01-01T00:00:01+00:00',
+                   tp=120, sl=98, rr=10, oco_order_list_id=5,
+                   oco_list_client_order_id='list', tp_order_id=10, sl_order_id=11)
     state = initial_state()
     state['open_positions'][pos.symbol] = asdict(pos)
     market = Mock()
@@ -52,6 +56,24 @@ def context(tmp_path):
     def sync():
         sync_positions(exchange,state,logger,cfg,market,{pos.symbol:rule})
     return cfg,pos,state,market,exchange,logger,sync
+
+
+def test_donchian_channel_position_is_left_to_the_daily_scan(tmp_path):
+    cfg = BotConfig(state_file=str(tmp_path/'state.json'), kill_switch_file=str(tmp_path/'STOP'))
+    pos = Position(symbol='BTCUSDT', signal_key='BTCUSDT:1', entry_order_id=7,
+                   entry_client_order_id='dce1', entry_price=100, quantity=0.5,
+                   risk_usdt=2, opened_at='2026-10-01T00:00:00+00:00',
+                   atr=1.0, exit_channel=90.0, entry_channel=120.0)
+    state = initial_state()
+    state['open_positions'][pos.symbol] = asdict(pos)
+    exchange, logger, market = Mock(), Mock(), Mock()
+    rule = SymbolRules(pos.symbol, 'BTC', 'USDT', Decimal('.01'), Decimal('.000001'),
+                       Decimal('.000001'), Decimal('10000'), Decimal('5'), True)
+    sync_positions(exchange, state, logger, cfg, market, {pos.symbol: rule})
+    assert exchange.mock_calls == []
+    assert pos.symbol in state['open_positions']
+    assert state['realized'] == []
+    logger.emit.assert_not_called()
 
 
 def test_tp_touch_then_reversal_closes_once_at_actual_fill_even_when_entries_paused(context):

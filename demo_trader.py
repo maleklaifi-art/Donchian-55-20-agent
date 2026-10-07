@@ -10,33 +10,29 @@ import os
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import requests
 from requests.adapters import HTTPAdapter
 
 from strategy import (
+    DEFAULT_UNIVERSE_SYMBOLS,
     Candle,
+    DonchianConfig,
     Evaluation,
     Signal,
-    StrategyConfig,
-    evaluate_latest,
-    evaluate_latest_detailed,
+    evaluate_donchian,
     is_current_signal_close,
-    latest_nr7_box_from_daily,
-    reward_risk_is_accepted,
+    within_entry_grace,
 )
-
-from exit_monitor import monitor_production_exit
 
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
-MAX_TRADE_RISK_USDT = 2.0
 MAX_POSITION_NOTIONAL_USDT = 100.0
 # User-specified stablecoin/fiat pairs. Exact matches avoid excluding unrelated coins.
 EXCLUDED_SYMBOLS = frozenset({
@@ -47,18 +43,21 @@ EXCLUDED_SYMBOLS = frozenset({
 
 @dataclass
 class BotConfig:
-    max_symbols: int = 1000
     scan_workers: int = 100
-    hourly_history_bars: int = 1000
+    daily_history_bars: int = 120
     quote_asset: str = "USDT"
 
-    # Per-trade risk limit; position count is constrained by available bankroll.
-    risk_per_trade_usdt: float = 2.0
+    # Active universe (dashboard-editable named universes).
+    universe_name: str = "Core 10"
+    universe_symbols: List[str] = field(default_factory=lambda: list(DEFAULT_UNIVERSE_SYMBOLS))
+
+    # Per-trade risk: risk_per_trade_pct of equity, sized via 2 x ATR(20).
+    risk_per_trade_pct: float = 1.0
     daily_loss_limit_r: float = 3.0
     max_position_notional_pct: float = 100.0
     max_position_notional_usdt: float = MAX_POSITION_NOTIONAL_USDT
-    max_entry_drift_pct: float = 0.30
     demo_equity_cap_usdt: float = 200.0  # funded capital; balance also includes realized P&L
+    entry_grace_minutes: int = 15
 
     # API / runtime.
     request_timeout_s: int = 15
@@ -90,15 +89,20 @@ class Position:
     entry_client_order_id: str
     entry_price: float
     quantity: float
-    tp: float
-    sl: float
-    rr: float
     risk_usdt: float
     opened_at: str
-    oco_order_list_id: int
-    oco_list_client_order_id: str
-    tp_order_id: int
-    sl_order_id: int
+    # Donchian bookkeeping (new positions).
+    atr: Optional[float] = None
+    exit_channel: Optional[float] = None
+    entry_channel: Optional[float] = None
+    # Legacy OCO bookkeeping (positions opened before the Donchian cutover).
+    tp: Optional[float] = None
+    sl: Optional[float] = None
+    rr: Optional[float] = None
+    oco_order_list_id: int = 0
+    oco_list_client_order_id: str = ""
+    tp_order_id: int = 0
+    sl_order_id: int = 0
 
 
 class EventLogger:
@@ -121,9 +125,8 @@ class PublicMarketClient:
         self.base = PRODUCTION_MARKET_BASE
         self.timeout_s = timeout_s
         self.s = requests.Session()
-        self.s.headers.update({"User-Agent": "nr7-demo-autotrader-market/1.0"})
+        self.s.headers.update({"User-Agent": "donchian-55-20-market/1.0"})
         # Keep enough reusable connections for the scanner's parallel workers.
-        # This changes transport latency only; strategy calculations are untouched.
         adapter = HTTPAdapter(pool_connections=200, pool_maxsize=200, max_retries=0)
         self.s.mount("https://", adapter)
 
@@ -143,32 +146,23 @@ class PublicMarketClient:
                 time.sleep(0.6 * (attempt + 1))
         raise RuntimeError(f"public request failed {path}: {last_error}")
 
-    def symbols(self, quote_asset: str, max_symbols: int) -> List[str]:
-        # Refresh each scan. Never fall back to ticker-only selection if this fails.
+    def resolve_universe(self, requested: List[str], quote_asset: str) -> List[str]:
+        """Validate the configured universe against live exchangeInfo.
+
+        Order is preserved. Never falls back to ticker ranking; symbols that are
+        missing, halted or not spot-tradable are simply dropped from the scan.
+        """
         info = self.get("/api/v3/exchangeInfo")
         eligible = {
             item["symbol"] for item in info["symbols"]
             if item.get("status") == "TRADING"
             and item.get("isSpotTradingAllowed") is True
             and item.get("quoteAsset") == quote_asset.upper()
-            and item["symbol"] not in EXCLUDED_SYMBOLS
         }
-        tickers = self.get("/api/v3/ticker/24hr")
-        suffix = quote_asset.upper()
-        blocked = ("UP", "DOWN", "BULL", "BEAR")
-        candidates = []
-        for item in tickers:
-            symbol = str(item.get("symbol", ""))
-            if symbol not in eligible:
-                continue
-            if not symbol.endswith(suffix) or any(word in symbol for word in blocked):
-                continue
-            try:
-                candidates.append((symbol, float(item.get("quoteVolume", 0) or 0)))
-            except (TypeError, ValueError):
-                continue
-        candidates.sort(key=lambda row: row[1], reverse=True)
-        return [symbol for symbol, _ in candidates[:max_symbols]]
+        return [
+            symbol for symbol in requested
+            if symbol not in EXCLUDED_SYMBOLS and symbol in eligible
+        ]
 
     def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
         rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
@@ -181,6 +175,7 @@ class PublicMarketClient:
         ]
 
     def aggregate_trades(self, symbol: str, *, start_ms=None, from_id=None):
+        # Only used to reconcile legacy OCO positions.
         params = {"symbol": symbol, "limit": 1000}
         if from_id is not None:
             params["fromId"] = from_id
@@ -204,7 +199,7 @@ class TestnetExecutionClient:
         self.timeout_s = timeout_s
         self.recv_window_ms = recv_window_ms
         self.s = requests.Session()
-        self.s.headers.update({"X-MBX-APIKEY": api_key, "User-Agent": "nr7-demo-autotrader-exec/1.0"})
+        self.s.headers.update({"X-MBX-APIKEY": api_key, "User-Agent": "donchian-55-20-exec/1.0"})
         self.time_offset_ms = 0
         self.sync_time()
 
@@ -298,28 +293,6 @@ class TestnetExecutionClient:
         except Exception:
             try:
                 return self.order(symbol, orig_client_order_id=client_order_id)
-            except Exception:
-                raise
-
-    def sell_oco_market_triggers(self, symbol: str, quantity: str, tp: str, sl: str, list_client_id: str):
-        # TAKE_PROFIT and STOP_LOSS are trigger-to-market orders. Exact trigger levels are preserved;
-        # fill price can differ in a real market, which is why this build remains testnet-only.
-        p = {
-            "symbol": symbol,
-            "side": "SELL",
-            "quantity": quantity,
-            "listClientOrderId": list_client_id,
-            "aboveType": "TAKE_PROFIT",
-            "aboveStopPrice": tp,
-            "belowType": "STOP_LOSS",
-            "belowStopPrice": sl,
-            "newOrderRespType": "RESULT",
-        }
-        try:
-            return self._signed("POST", "/api/v3/orderList/oco", p)
-        except Exception:
-            try:
-                return self.order_list(orig_client_order_id=list_client_id)
             except Exception:
                 raise
 
@@ -484,33 +457,22 @@ def account_free(account: dict, asset: str) -> float:
 def scan_market_detailed(
     market: PublicMarketClient,
     cfg: BotConfig,
-    scfg: StrategyConfig,
+    scfg: DonchianConfig,
     logger: EventLogger,
-    on_signal=None,
+    open_symbols: Optional[set] = None,
 ) -> dict:
-    symbols = market.symbols(cfg.quote_asset, cfg.max_symbols)
+    symbols = market.resolve_universe(cfg.universe_symbols, cfg.quote_asset)
     now_ms = int(time.time() * 1000)
-    signals: List[Signal] = []
-    phase_one = []
-    rejected = []
+    holding = set(open_symbols or ())
+    entries: List[Signal] = []
+    exits: List[Signal] = []
     filtered = []
     errors = 0
     started = time.monotonic()
 
     def one(sym: str):
-        h = market.klines(sym, "1h", cfg.hourly_history_bars)
-        evaluation = evaluate_latest_detailed(sym, h, scfg, now_ms)
-        # Fast path is one 1000-bar hourly request. Only if that window has no
-        # preserved NR7 box do we make a rare daily-history fallback request.
-        if evaluation.rejection_stage == "NR7" and h:
-            daily = market.klines(sym, "1d", 1000)
-            closed_hourly = [c for c in h if c.close_time < now_ms]
-            if closed_hourly:
-                signal_day = closed_hourly[-1].open_time // 86_400_000
-                fallback_box = latest_nr7_box_from_daily(daily, signal_day, now_ms)
-                if fallback_box is not None:
-                    evaluation = evaluate_latest_detailed(sym, h, scfg, now_ms, box_override=fallback_box)
-        return evaluation
+        daily = market.klines(sym, "1d", scfg.daily_history_bars)
+        return evaluate_donchian(sym, daily, scfg, now_ms, holding=sym in holding, universe=cfg.universe_name)
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.scan_workers)) as pool:
         futs = {pool.submit(one, s): s for s in symbols}
@@ -518,48 +480,23 @@ def scan_market_detailed(
             sym = futs[fut]
             try:
                 evaluation: Evaluation = fut.result()
-                if evaluation.phase_one and not is_current_signal_close(
-                    evaluation.phase_one.signal_close_ms, int(time.time() * 1000)
-                ):
-                    evaluation = Evaluation(
-                        sym, evaluation.price, rejection_stage="Data",
-                        rejection_reason="Stale candles: scan crossed the next UTC hour",
-                    )
-                if evaluation.phase_one:
-                    candidate = evaluation.phase_one.to_dict()
-                    candidate["status"] = "PASSED" if evaluation.signal else "INDICATOR_NOT_PASSED"
-                    candidate["indicator_stage"] = evaluation.rejection_stage
-                    candidate["indicator_reason"] = evaluation.rejection_reason
-                    if evaluation.indicator_volume_surge is not None:
-                        candidate["indicator_volume_surge"] = evaluation.indicator_volume_surge
-                    if evaluation.close_position is not None:
-                        candidate["close_position"] = evaluation.close_position
-                    if evaluation.rr is not None:
-                        candidate["rr"] = evaluation.rr
-                    phase_one.append(candidate)
-                if evaluation.signal:
+                if evaluation.signal is not None:
                     sig = evaluation.signal
-                    signals.append(sig)
-                    logger.emit("VALID_SIGNAL", **sig.to_dict())
-                    if on_signal is not None:
-                        try:
-                            on_signal(sig)
-                        except Exception as callback_exc:
-                            logger.emit("SIGNAL_CALLBACK_ERROR", symbol=sym, error=str(callback_exc), signal_key=signal_key(sig))
-                elif evaluation.phase_one:
-                    rejected.append(evaluation.filtered_dict())
+                    if sig.direction == "EXIT":
+                        exits.append(sig)
+                        logger.emit("EXIT_SIGNAL", **sig.to_dict())
+                    else:
+                        entries.append(sig)
+                        logger.emit("VALID_SIGNAL", **sig.to_dict())
                 else:
-                    # The original App display places every pre-confirmation
-                    # failure in Filtered and preserves its exact App reason.
                     filtered.append(evaluation.filtered_dict())
             except Exception as exc:
                 errors += 1
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
-    signals.sort(key=lambda x: x.signal_close_ms)
-    phase_one.sort(key=lambda x: x["symbol"])
-    rejected.sort(key=lambda x: x["symbol"])
+    entries.sort(key=lambda x: x.signal_close_ms)
+    exits.sort(key=lambda x: x.symbol)
     filtered.sort(key=lambda x: x["symbol"])
-    Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in signals], indent=2), encoding="utf-8")
+    Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in entries], indent=2), encoding="utf-8")
     duration = time.monotonic() - started
     snapshot = {
         "started_at_ms": now_ms,
@@ -567,36 +504,36 @@ def scan_market_detailed(
         "duration_seconds": round(duration, 3),
         "symbols": symbols,
         "coins_scanned": len(symbols),
-        "app_confirmed_count": len(phase_one),
-        "valid_count": len(signals),
-        "indicator_rejected_count": max(0, len(phase_one) - len(signals)),
+        "universe": cfg.universe_name,
+        "valid_count": len(entries),
+        "entry_count": len(entries),
+        "exit_count": len(exits),
         "error_count": errors,
-        "phase_one": phase_one,
-        "signals": [x.to_dict() for x in signals],
-        "rejected": rejected,
+        "signals": [x.to_dict() for x in entries],
+        "exit_signals": [x.to_dict() for x in exits],
         "filtered": filtered,
     }
     logger.emit(
         "SCAN_COMPLETE",
         symbols=len(symbols),
-        app_confirmed=len(phase_one),
-        valid_signals=len(signals),
-        rejected=len(rejected),
-        filtered=len(filtered),
+        universe=cfg.universe_name,
+        entries=len(entries),
+        exits=len(exits),
+        no_action=len(filtered),
         errors=errors,
         duration_seconds=round(duration, 3),
     )
     return snapshot
 
 
-def scan_market(market: PublicMarketClient, cfg: BotConfig, scfg: StrategyConfig, logger: EventLogger, on_signal=None) -> List[Signal]:
-    return [Signal(**row) for row in scan_market_detailed(market, cfg, scfg, logger, on_signal)["signals"]]
-
-
 def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: EventLogger, cfg: BotConfig, market=None, rules=None):
     changed = False
     for sym, pd in list(state.get("open_positions", {}).items()):
         pos = Position(**pd)
+        if not pos.tp_order_id and not pos.oco_order_list_id:
+            # Donchian positions carry no protective orders; live prices are
+            # refreshed by the engine. Only legacy OCO positions are reconciled.
+            continue
         try:
             tp_ord = exec_client.order(sym, order_id=pos.tp_order_id)
             sl_ord = exec_client.order(sym, order_id=pos.sl_order_id)
@@ -686,16 +623,21 @@ def place_signal(
     state: dict,
     cfg: BotConfig,
     logger: EventLogger,
-    minimum_reward_risk: float = 1.0,
-    maximum_reward_risk: float = 4.0,
     realized_pnl_usdt=None,
 ):
     key = signal_key(sig)
+    if getattr(sig, "direction", "LONG") != "LONG":
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="not a LONG entry signal")
+        return
     if sig.symbol.upper() in EXCLUDED_SYMBOLS:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="excluded stablecoin/fiat symbol")
         return
-    if not is_current_signal_close(sig.signal_close_ms, int(time.time() * 1000)):
+    now_ms = int(time.time() * 1000)
+    if not is_current_signal_close(sig.signal_close_ms, now_ms):
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale signal candle")
+        return
+    if not within_entry_grace(now_ms, cfg.entry_grace_minutes):
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="entry grace window expired")
         return
     if key in set(state.get("seen_signals", [])):
         return
@@ -736,56 +678,49 @@ def place_signal(
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no free demo quote balance", signal_key=key)
         return
 
-    # Live production book check protects the signal-close assumptions before demo execution.
-    live_ask = market.best_ask(sig.symbol)
-    drift_pct = (live_ask / sig.entry - 1.0) * 100.0
-    if drift_pct > cfg.max_entry_drift_pct:
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="entry drift too high", drift_pct=drift_pct, signal_key=key)
-        return
-    if not (sig.sl < live_ask < sig.tp):
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="live price outside SL/TP interval", live_ask=live_ask, signal_key=key)
-        return
-    execution_rr = (sig.tp - live_ask) / (live_ask - sig.sl)
-    if not reward_risk_is_accepted(execution_rr, minimum_reward_risk, maximum_reward_risk):
-        logger.emit(
-            "TRADE_REJECTED", symbol=sig.symbol,
-            reason=f"execution-time RR must be strictly > {minimum_reward_risk:g}",
-            execution_rr=execution_rr, signal_key=key,
-        )
+    stop_distance = float(sig.stop_distance)
+    if not (math.isfinite(stop_distance) and stop_distance > 0):
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="invalid ATR stop distance", signal_key=key)
         return
 
-    risk_budget = min(MAX_TRADE_RISK_USDT, cfg.risk_per_trade_usdt, equity)
+    # Spec sizing: qty = (risk_pct x equity) / (2 x ATR); buy by quote notional.
+    risk_budget = min(equity, equity * cfg.risk_per_trade_pct / 100.0)
     if risk_budget <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no per-trade risk budget", signal_key=key)
         return
 
-    stop_distance = live_ask - sig.sl
-    qty_by_risk = risk_budget / stop_distance
-    max_notional = min(MAX_POSITION_NOTIONAL_USDT, cfg.max_position_notional_usdt,
-                       equity * cfg.max_position_notional_pct / 100.0)
-    qty_by_notional = max_notional / live_ask
-    qty = min(qty_by_risk, qty_by_notional)
+    live_ask = market.best_ask(sig.symbol)
+    qty = risk_budget / stop_distance
     quote_notional = qty * live_ask
+    max_notional = min(
+        MAX_POSITION_NOTIONAL_USDT,
+        cfg.max_position_notional_usdt,
+        equity * cfg.max_position_notional_pct / 100.0,
+        # Leave a tiny buffer for testnet price movement/fees.
+        available_quote * 0.995,
+    )
+    quote_notional = min(quote_notional, max_notional)
+    if quote_notional <= 0:
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no order budget", signal_key=key)
+        return
     if quote_notional < float(rule.min_notional):
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="calculated position below min notional", notional=quote_notional, signal_key=key)
         return
 
-    # Leave a tiny buffer for testnet price movement/fees.
-    quote_notional = min(quote_notional, available_quote * 0.995)
     quote_dec = floor_step(quote_notional, Decimal("0.00000001"))
     if quote_dec <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="position rounds to zero", signal_key=key)
         return
-
     if quote_dec < rule.min_notional:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="available balance below min notional", signal_key=key)
         return
 
-    entry_cid = deterministic_id("nr7e", key)
+    entry_cid = deterministic_id("dce", key)
     logger.emit(
         "ENTRY_SUBMIT",
         symbol=sig.symbol, signal_key=key, signal_entry=sig.entry, live_ask=live_ask,
-        execution_rr=execution_rr, risk_budget_usdt=risk_budget, quote_order_qty=fmt_dec(quote_dec),
+        atr=sig.atr, stop_distance=stop_distance, risk_budget_usdt=risk_budget,
+        quote_order_qty=fmt_dec(quote_dec),
     )
     entry = exec_client.market_buy_quote(sig.symbol, fmt_dec(quote_dec), entry_cid)
     executed_qty = float(entry.get("executedQty", 0) or 0)
@@ -804,10 +739,8 @@ def place_signal(
     try:
         save_state(cfg.state_file, state)
     except Exception as state_exc:
-        # Protection takes priority after a fill. Continue immediately to the
-        # OCO/flatten path even if the accounting ledger could not be written.
-        # Also attempt to pause later entries because the daily ledger is no
-        # longer trustworthy.
+        # Accounting takes priority after a fill. Pause later entries because
+        # the daily ledger is no longer longer trustworthy.
         try:
             kill = Path(cfg.kill_switch_file)
             kill.parent.mkdir(parents=True, exist_ok=True)
@@ -826,79 +759,15 @@ def place_signal(
     for fill in entry.get("fills", []) or []:
         if fill.get("commissionAsset") == rule.base_asset:
             commission_base += float(fill.get("commission", 0) or 0)
-    protect_qty_raw = max(0.0, executed_qty - commission_base)
-    protect_qty = floor_step(protect_qty_raw, rule.step_size)
-    tp_tick = nearest_tick(sig.tp, rule.tick_size)
-    sl_tick = nearest_tick(sig.sl, rule.tick_size)
+    position_qty_raw = max(0.0, executed_qty - commission_base)
+    position_qty = floor_step(position_qty_raw, rule.step_size)
 
-    if protect_qty < rule.min_qty or protect_qty > rule.max_qty:
-        # Emergency flatten any filled exposure rather than leave an uncontrolled position.
-        emergency_qty = floor_step(protect_qty_raw, rule.step_size)
+    if position_qty < rule.min_qty or position_qty > rule.max_qty:
+        # Emergency flatten any filled exposure rather than hold an unusable lot.
+        emergency_qty = floor_step(executed_qty, rule.step_size)
         if emergency_qty >= rule.min_qty:
-            exec_client.market_sell_qty(sig.symbol, fmt_dec(emergency_qty), deterministic_id("nr7x", key))
-        logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="protective quantity invalid", signal_key=key)
-        return
-
-    # Re-check the strict Pine lower bound using the actual fill (no RR cap).
-    actual_risk = avg_fill - float(sl_tick)
-    actual_reward = float(tp_tick) - avg_fill
-    actual_rr = actual_reward / actual_risk if actual_risk > 0 else -1
-    actual_position_risk = float(protect_qty) * actual_risk
-    if actual_position_risk > cfg.risk_per_trade_usdt + 1e-9 or actual_position_risk > risk_budget + 1e-9:
-        exec_client.market_sell_qty(sig.symbol, fmt_dec(protect_qty), deterministic_id("nr7x", key))
-        logger.emit(
-            "EMERGENCY_FLATTEN", symbol=sig.symbol,
-            reason="fill risk exceeded absolute demo limit",
-            actual_risk_usdt=actual_position_risk,
-            risk_limit_usdt=min(cfg.risk_per_trade_usdt, risk_budget),
-            signal_key=key,
-        )
-        return
-    if not reward_risk_is_accepted(actual_rr, minimum_reward_risk, maximum_reward_risk):
-        exec_client.market_sell_qty(sig.symbol, fmt_dec(protect_qty), deterministic_id("nr7x", key))
-        logger.emit(
-            "EMERGENCY_FLATTEN", symbol=sig.symbol,
-            reason=f"fill changed RR to <= {minimum_reward_risk:g}",
-            actual_rr=actual_rr, signal_key=key,
-        )
-        return
-
-    list_cid = deterministic_id("nr7o", key)
-    try:
-        oco = exec_client.sell_oco_market_triggers(
-            sig.symbol, fmt_dec(protect_qty), fmt_dec(tp_tick), fmt_dec(sl_tick), list_cid
-        )
-    except Exception as exc:
-        # Core safety invariant: never intentionally leave a filled position without protection.
-        try:
-            exec_client.market_sell_qty(sig.symbol, fmt_dec(protect_qty), deterministic_id("nr7x", key))
-            logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="OCO placement failed", error=str(exc), signal_key=key)
-        except Exception as flatten_exc:
-            logger.emit("FATAL_UNPROTECTED_POSITION", symbol=sig.symbol, error=str(flatten_exc), original_error=str(exc), signal_key=key)
-        return
-
-    orders = oco.get("orders", []) or []
-    reports = oco.get("orderReports", []) or []
-    tp_order_id = sl_order_id = None
-    for r in reports:
-        typ = r.get("type")
-        oid = r.get("orderId")
-        if typ in ("TAKE_PROFIT", "TAKE_PROFIT_LIMIT"):
-            tp_order_id = int(oid)
-        elif typ in ("STOP_LOSS", "STOP_LOSS_LIMIT"):
-            sl_order_id = int(oid)
-    if tp_order_id is None or sl_order_id is None:
-        # Fallback: query each order id and identify its type.
-        for x in orders:
-            oid = int(x["orderId"])
-            od = exec_client.order(sig.symbol, order_id=oid)
-            if od.get("type") in ("TAKE_PROFIT", "TAKE_PROFIT_LIMIT"):
-                tp_order_id = oid
-            elif od.get("type") in ("STOP_LOSS", "STOP_LOSS_LIMIT"):
-                sl_order_id = oid
-    if tp_order_id is None or sl_order_id is None:
-        # We know an OCO was accepted but cannot verify both legs: block state and require intervention.
-        logger.emit("FATAL_POSITION_STATE", symbol=sig.symbol, reason="could not identify both OCO legs", response=oco, signal_key=key)
+            exec_client.market_sell_qty(sig.symbol, fmt_dec(emergency_qty), deterministic_id("dcx", key))
+        logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="position quantity invalid", signal_key=key)
         return
 
     pos = Position(
@@ -907,37 +776,118 @@ def place_signal(
         entry_order_id=int(entry["orderId"]),
         entry_client_order_id=entry_cid,
         entry_price=avg_fill,
-        quantity=float(protect_qty),
-        tp=float(tp_tick),
-        sl=float(sl_tick),
-        rr=actual_rr,
-        risk_usdt=actual_position_risk,
+        quantity=float(position_qty),
+        risk_usdt=float(position_qty) * stop_distance,
         opened_at=datetime.now(timezone.utc).isoformat(),
-        oco_order_list_id=int(oco["orderListId"]),
-        oco_list_client_order_id=list_cid,
-        tp_order_id=int(tp_order_id),
-        sl_order_id=int(sl_order_id),
+        atr=sig.atr,
+        exit_channel=sig.exit_channel,
+        entry_channel=sig.entry_channel,
     )
     state["open_positions"][sig.symbol] = asdict(pos)
-    state.setdefault("exit_watch", {})[key] = {
-        "start_ms": int(entry.get("transactTime", int(time.time() * 1000))) + 1,
-        "last_id": None,
-    }
     save_state(cfg.state_file, state)
     logger.emit("POSITION_OPENED", **asdict(pos))
 
 
+def close_position(
+    sig: Signal,
+    market: PublicMarketClient,
+    exec_client: TestnetExecutionClient,
+    rules: Dict[str, SymbolRules],
+    state: dict,
+    cfg: BotConfig,
+    logger: EventLogger,
+):
+    """Flatten a held position when the just-closed daily close broke the exit channel."""
+    key = signal_key(sig)
+    now_ms = int(time.time() * 1000)
+    if not is_current_signal_close(sig.signal_close_ms, now_ms):
+        logger.emit("EXIT_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale exit signal")
+        return
+    pos = state.get("open_positions", {}).get(sig.symbol)
+    if not pos:
+        logger.emit("EXIT_REJECTED", symbol=sig.symbol, signal_key=key, reason="no open position")
+        return
+    rule = rules.get(sig.symbol)
+    if not rule:
+        logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key, reason="symbol rules unavailable on Spot Testnet")
+        return
+
+    account = exec_client.account()
+    base_free = account_free(account, rule.base_asset)
+    sell_qty = floor_step(min(float(pos.get("quantity", 0)), base_free), rule.step_size)
+    if sell_qty < rule.min_qty:
+        logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key,
+                    reason="nothing sellable: position below min quantity or base balance missing",
+                    quantity=pos.get("quantity"), base_free=base_free)
+        return
+
+    cid = deterministic_id("dcx", key)
+    sell = exec_client.market_sell_qty(sig.symbol, fmt_dec(sell_qty), cid)
+    executed_qty = float(sell.get("executedQty", 0) or 0)
+    cumulative_quote = float(sell.get("cummulativeQuoteQty", 0) or 0)
+    if executed_qty <= 0 or cumulative_quote <= 0:
+        # Unknown-status safety: query the deterministic id before deciding.
+        try:
+            sell = exec_client.order(sig.symbol, orig_client_order_id=cid)
+            executed_qty = float(sell.get("executedQty", 0) or 0)
+            cumulative_quote = float(sell.get("cummulativeQuoteQty", 0) or 0)
+        except Exception:
+            pass
+    if executed_qty <= 0 or cumulative_quote <= 0:
+        logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key,
+                    reason="exit fill could not be verified; position retained", response=sell)
+        return
+
+    exit_price = cumulative_quote / executed_qty
+    entry_price = float(pos.get("entry_price") or 0.0)
+    closed_qty = min(float(pos.get("quantity", 0)), executed_qty)
+    pnl_usdt = (exit_price - entry_price) * closed_qty
+    risk_usdt = float(pos.get("risk_usdt") or 0.0)
+    result_r = pnl_usdt / risk_usdt if risk_usdt > 0 else 0.0
+    pnl_pct = ((exit_price / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
+    closed_at = datetime.now(timezone.utc)
+    record = {
+        "day": closed_at.date().isoformat(), "symbol": sig.symbol, "r": result_r,
+        "outcome": "CHANNEL_EXIT", "closed_at": closed_at.isoformat(),
+        # The trade row is keyed by the entry signal; the exit signal gets its own id.
+        "signal_key": pos.get("signal_key") or key, "exit_signal_key": key,
+        "opened_at": pos.get("opened_at"),
+        "entry_price": entry_price, "exit_price": exit_price,
+        "quantity": closed_qty, "atr": pos.get("atr"),
+        "entry_channel": pos.get("entry_channel"), "exit_channel": pos.get("exit_channel"),
+        "risk_usdt": risk_usdt,
+        "entry_quote": entry_price * float(pos.get("quantity", 0)),
+        "exit_quote": cumulative_quote,
+        "pnl_usdt": pnl_usdt, "pnl_pct": pnl_pct,
+        "entry_order_id": pos.get("entry_order_id"), "exit_order_id": int(sell.get("orderId", 0) or 0),
+    }
+    state["realized"].append(record)
+    del state["open_positions"][sig.symbol]
+    try:
+        save_state(cfg.state_file, state)
+    except Exception as state_exc:
+        try:
+            kill = Path(cfg.kill_switch_file)
+            kill.parent.mkdir(parents=True, exist_ok=True)
+            kill.write_text("Paused: state save failed after a filled exit.\n", encoding="utf-8")
+        except Exception:
+            pass
+        print(json.dumps({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "event": "STATE_SAVE_ERROR_AFTER_CLOSE",
+            "symbol": sig.symbol,
+            "signal_key": key,
+            "error": str(state_exc),
+        }), flush=True)
+    logger.emit("POSITION_CLOSED", **record, realized_r=result_r)
+
+
 def run_once(cfg: BotConfig, execute_demo: bool):
     logger = EventLogger(cfg.event_log)
-    scfg = StrategyConfig(
-        app_minimum_surge=1.5,
-        indicator_volume_lookback=168,
-        indicator_minimum_surge=1.5,
-        minimum_close_position=0.75,
-        pine_minimum_reward_risk=1.0,
-        minimum_reward_risk=1.0,
-        maximum_reward_risk=4.0,
-        swing_length=50,
+    scfg = DonchianConfig(
+        daily_history_bars=cfg.daily_history_bars,
+        risk_pct=cfg.risk_per_trade_pct,
+        entry_grace_minutes=cfg.entry_grace_minutes,
     )
     market = PublicMarketClient(cfg.request_timeout_s)
     state = load_state(cfg.state_file)
@@ -954,29 +904,29 @@ def run_once(cfg: BotConfig, execute_demo: bool):
         rules = load_rules(exec_client.exchange_info())
         sync_positions(exec_client, state, logger, cfg, market, rules)
 
-    signals = scan_market(market, cfg, scfg, logger)
+    snapshot = scan_market_detailed(market, cfg, scfg, logger, open_symbols=set(state.get("open_positions", {})))
     if not execute_demo:
         logger.emit("SCAN_ONLY", reason="--execute-demo not supplied; no orders submitted")
         return
 
-    for sig in signals:
-        place_signal(
-            sig, market, exec_client, rules, state, cfg, logger,
-            scfg.minimum_reward_risk, scfg.maximum_reward_risk,
-        )
+    # Flattening first frees capital for same-boundary entries.
+    for row in snapshot.get("exit_signals", []):
+        close_position(Signal(**row), market, exec_client, rules, state, cfg, logger)
+    for row in snapshot.get("signals", []):
+        place_signal(Signal(**row), market, exec_client, rules, state, cfg, logger)
 
 
-def sleep_to_next_hour():
+def sleep_to_next_day():
     now = time.time()
-    next_hour = (math.floor(now / 3600) + 1) * 3600 + 10
-    time.sleep(max(30, next_hour - now))
+    next_day = (math.floor(now / 86_400) + 1) * 86_400 + 10
+    time.sleep(max(30, next_day - now))
 
 
 def main():
-    ap = argparse.ArgumentParser(description="NR7 app + indicator Binance Spot Testnet autonomous demo trader")
+    ap = argparse.ArgumentParser(description="Donchian 55/20 Binance Spot Testnet autonomous demo trader")
     ap.add_argument("--config", default="config.json")
     ap.add_argument("--execute-demo", action="store_true", help="Actually place orders on Binance Spot Testnet")
-    ap.add_argument("--loop", action="store_true", help="Run after every completed UTC 1H candle")
+    ap.add_argument("--loop", action="store_true", help="Run once per UTC day after the daily candle closes")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -984,9 +934,12 @@ def main():
         run_once(cfg, args.execute_demo)
         if not args.loop:
             break
-        sleep_to_next_hour()
+        sleep_to_next_day()
+
+
+# Deferred import avoids a module initialization cycle (exit_monitor uses demo_trader helpers).
+from exit_monitor import monitor_production_exit  # noqa: E402
 
 
 if __name__ == "__main__":
     main()
-

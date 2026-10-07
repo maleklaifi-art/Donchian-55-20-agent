@@ -1,5 +1,5 @@
 services:
-  nr7-demo-agent:
+  donchian-demo-agent:
     build: .
     restart: unless-stopped
     ports:
@@ -11,7 +11,7 @@ services:
       AUTO_START_NEW_TRADES: "true"
       DATA_DIR: "/data"
     volumes:
-      - nr7_demo_data:/data
+      - donchian_demo_data:/data
 
 volumes:
-  nr7_demo_data:
+  donchian_demo_data:

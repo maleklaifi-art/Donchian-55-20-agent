@@ -1,143 +1,197 @@
-from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import pytest
 import demo_trader
-from demo_trader import BotConfig, PublicMarketClient, place_signal, scan_market_detailed
-from strategy import Candle, StrategyConfig, evaluate_latest_detailed, is_current_signal_close
+from demo_trader import (
+    BotConfig,
+    DonchianConfig,
+    EventLogger,
+    PublicMarketClient,
+    place_signal,
+    scan_market_detailed,
+)
+from strategy import DAY_MS, Candle, evaluate_donchian, is_current_signal_close
 
-HOUR = 3_600_000
-NOW = int(datetime(2026, 9, 27, 19, tzinfo=timezone.utc).timestamp() * 1000)
-
-
-def history(ending_at):
-    return [
-        Candle(ending_at - (240 - i) * HOUR, 100, 102, 98, 100, 10,
-               ending_at - (239 - i) * HOUR - 1, 1000)
-        for i in range(240)
-    ]
-
-
-@pytest.mark.parametrize("now", [NOW, NOW + 120_000, NOW + HOUR - 1,
-                                 int(datetime(2026, 9, 28, tzinfo=timezone.utc).timestamp() * 1000)])
-def test_exact_previous_hour_only(now):
-    expected = now // HOUR * HOUR - 1
-    assert is_current_signal_close(expected, now)
-    for wrong in [expected - HOUR, expected + HOUR, expected - 1, expected + 1]:
-        assert not is_current_signal_close(wrong, now)
+N_DAYS = 61
+BOUNDARY = N_DAYS * DAY_MS
+NOW = BOUNDARY + 30_000
+FLAT = [(100, 101, 99, 100)] * 60
 
 
-@pytest.mark.parametrize("end", [NOW - HOUR, int(datetime(2025, 5, 26, 4, tzinfo=timezone.utc).timestamp() * 1000)])
-def test_old_data_rejected_before_any_strategy_calculation(end):
-    with patch("strategy.latest_prior_nr7_box") as nr7:
-        result = evaluate_latest_detailed("EOSUSDT", history(end), StrategyConfig(), NOW)
-    assert result.signal is None and result.phase_one is None
+def daily(specs, start_day=0):
+    rows = []
+    for i, (o, h, l, c) in enumerate(specs):
+        open_time = (start_day + i) * DAY_MS
+        rows.append(Candle(open_time, o, h, l, c, 10.0, open_time + DAY_MS - 1, 1000.0))
+    return rows
+
+
+def test_exact_previous_daily_close_only():
+    for extra in [0, 60_000, DAY_MS - 1]:
+        now = BOUNDARY + extra
+        expected = now // DAY_MS * DAY_MS - 1
+        assert is_current_signal_close(expected, now)
+        for wrong in [expected - DAY_MS, expected + DAY_MS, expected - 1, expected + 1]:
+            assert not is_current_signal_close(wrong, now)
+
+
+def test_old_data_rejected_before_any_strategy_calculation(monkeypatch):
+    import strategy
+    called = []
+    monkeypatch.setattr(strategy, "wilders_atr", lambda *a, **k: called.append(1))
+    stale_now = NOW + 10 * DAY_MS
+    result = evaluate_donchian("EOSUSDT", daily(FLAT), DonchianConfig(), stale_now)
+    assert result.signal is None
     assert result.rejection_stage == "Data"
-    assert "Stale candles" in result.rejection_reason
-    nr7.assert_not_called()
+    assert "Stale daily candles" in result.rejection_reason
+    assert called == []
 
 
-def test_current_hour_reaches_original_strategy_and_ignores_open_candle():
-    rows = history(NOW)
-    rows.append(Candle(NOW, 100, 900, 1, 800, 9999, NOW + HOUR - 1, 9999))
-    with patch("strategy.latest_prior_nr7_box", return_value=None) as nr7:
-        result = evaluate_latest_detailed("TESTUSDT", rows, StrategyConfig(), NOW + 20_000)
-    assert result.rejection_stage == "NR7"
-    assert len(nr7.call_args.args[0]) == 240
+def test_current_day_reaches_the_evaluator_and_ignores_the_open_candle(monkeypatch):
+    import strategy
+    rows = daily(FLAT + [(108, 115, 105, 110)])
+    rows.append(Candle(N_DAYS * DAY_MS, 100, 900, 1, 800, 9999.0, (N_DAYS + 1) * DAY_MS - 1, 9999.0))
+    seen = []
+    original = strategy.wilders_atr
+    monkeypatch.setattr(strategy, "wilders_atr", lambda bars, period: (seen.append(len(bars)), original(bars, period))[1])
+    result = evaluate_donchian("TESTUSDT", rows, DonchianConfig(), NOW + 20_000)
+    assert result.signal is not None and result.signal.direction == "LONG"
+    assert seen == [61]
 
 
-def test_gap_before_breakout_cannot_act_as_previous_candle():
-    rows = history(NOW)
+def test_gap_between_daily_candles_cannot_stand_in_for_a_missing_day():
+    rows = daily(FLAT + [(108, 115, 105, 110)])
     del rows[-2]
-    rows.insert(0, Candle(rows[0].open_time - HOUR, 100, 102, 98, 100, 10, rows[0].open_time - 1, 1000))
-    result = evaluate_latest_detailed("TESTUSDT", rows, StrategyConfig(), NOW)
-    assert result.rejection_stage == "Data"
+    rows.insert(0, daily([(100, 101, 99, 100)], start_day=-1)[0])
+    result = evaluate_donchian("TESTUSDT", rows, DonchianConfig(), NOW)
+    assert result.signal is None and result.rejection_stage == "Data"
     assert "consecutive" in result.rejection_reason
 
 
-def test_universe_filters_status_before_top_n_and_refreshes():
-    active = dict(symbol="ACTIVEUSDT", status="TRADING", isSpotTradingAllowed=True, quoteAsset="USDT")
-    small = dict(active, symbol="SMALLUSDT")
-    stopped = dict(active, symbol="EOSUSDT", status="BREAK")
-    halted = dict(active, symbol="HALTUSDT", status="HALT")
-    futures = dict(active, symbol="FUTUREUSDT", isSpotTradingAllowed=False)
-    wrong_quote = dict(active, symbol="WRONGUSDT", quoteAsset="BTC")
-    missing_flag = dict(active, symbol="UNKNOWNUSDT")
-    del missing_flag["isSpotTradingAllowed"]
-    items = [active, small, stopped, halted, futures, wrong_quote, missing_flag]
-    tickers = [dict(symbol=x["symbol"], quoteVolume=10000) for x in items[2:]]
-    tickers += [dict(symbol="REMOVEDUSDT", quoteVolume=50000),
-                dict(symbol="ACTIVEUSDT", quoteVolume=200),
-                dict(symbol="SMALLUSDT", quoteVolume=100)]
+def active(symbol="ACTIVEUSDT", **over):
+    row = dict(symbol=symbol, status="TRADING", isSpotTradingAllowed=True, quoteAsset="USDT")
+    row.update(over)
+    return row
+
+
+def test_universe_resolution_filters_exchange_state_and_keeps_order():
+    missing_flag = dict(symbol="UNKNOWNUSDT", status="TRADING", quoteAsset="USDT")
+    items = [
+        active(),
+        active("SMALLUSDT"),
+        active("EOSUSDT", status="BREAK"),
+        active("HALTUSDT", status="HALT"),
+        active("FUTUREUSDT", isSpotTradingAllowed=False),
+        active("WRONGUSDT", quoteAsset="BTC"),
+        missing_flag,
+        active("FDUSDUSDT"),  # stablecoin, excluded by name
+    ]
     client = PublicMarketClient(1)
-    with patch.object(client, "get", side_effect=[{"symbols": items}, tickers,
-                                                {"symbols": [small]}, tickers]) as get:
-        assert client.symbols("USDT", 1) == ["ACTIVEUSDT"]
-        assert client.symbols("USDT", 1000) == ["SMALLUSDT"]
-    assert [x.args[0] for x in get.call_args_list].count("/api/v3/exchangeInfo") == 2
+    requested = ["SMALLUSDT", "ACTIVEUSDT", "HALTUSDT", "EOSUSDT", "FUTUREUSDT",
+                 "WRONGUSDT", "UNKNOWNUSDT", "FDUSDUSDT", "REMOVEDUSDT"]
+    with patch.object(client, "get", return_value={"symbols": items}) as get:
+        assert client.resolve_universe(requested, "USDT") == ["SMALLUSDT", "ACTIVEUSDT"]
+    assert get.call_count == 1
+    assert get.call_args.args[0] == "/api/v3/exchangeInfo"
 
 
 def test_no_ticker_fallback_when_exchange_info_fails():
     client = PublicMarketClient(1)
     with patch.object(client, "get", side_effect=RuntimeError("HTTP 500")) as get:
         with pytest.raises(RuntimeError):
-            client.symbols("USDT", 1000)
+            client.resolve_universe(["BTCUSDT"], "USDT")
     assert get.call_count == 1
 
 
-def test_stablecoin_exclusions_apply_before_volume_ranking():
-    symbols = sorted(demo_trader.EXCLUDED_SYMBOLS) + ['BTCUSDT', 'ETHUSDT']
-    info = {'symbols': [dict(symbol=s, status='TRADING', isSpotTradingAllowed=True,
-                             quoteAsset='USDT') for s in symbols]}
-    tickers = [dict(symbol=s, quoteVolume=10000-i) for i, s in enumerate(symbols)]
+def test_stablecoin_exclusions_apply_to_the_requested_universe():
+    symbols = sorted(demo_trader.EXCLUDED_SYMBOLS) + ["BTCUSDT", "ETHUSDT"]
+    info = {"symbols": [active(s) for s in symbols]}
     client = PublicMarketClient(1)
-    with patch.object(client, 'get', side_effect=[info, tickers]):
-        assert client.symbols('USDT', 2) == ['BTCUSDT', 'ETHUSDT']
+    with patch.object(client, "get", return_value=info):
+        assert client.resolve_universe(symbols, "USDT") == ["BTCUSDT", "ETHUSDT"]
 
 
-def test_stale_scan_retained_as_data_failure_without_alert_or_daily_fallback(tmp_path):
-    market = Mock()
-    market.symbols.return_value = ["EOSUSDT"]
-    market.klines.return_value = history(NOW - 1000 * HOUR)
-    cfg = BotConfig(signal_log=str(tmp_path / "signals.json"))
-    callback = Mock()
+class FakeMarket:
+    def __init__(self, data):
+        self.data = data
+        self.kline_calls = []
+
+    def resolve_universe(self, requested, quote_asset):
+        return [s for s in requested if s in self.data]
+
+    def klines(self, symbol, interval, limit):
+        self.kline_calls.append((symbol, interval, limit))
+        return self.data[symbol]
+
+
+def universe_data():
+    return {
+        "BREAKOUTUSDT": daily(FLAT + [(108, 115, 105, 110)]),
+        "EXITMEUSDT": daily(FLAT + [(97, 98, 94, 95)]),
+        "HELDUSDT": daily(FLAT + [(100, 101, 99, 100)]),
+        "FLATUSDT": daily(FLAT + [(100, 101, 99, 100)]),
+    }
+
+
+def scan(market, tmp_path, holding=("EXITMEUSDT", "HELDUSDT")):
+    cfg = BotConfig(scan_workers=4, universe_symbols=list(market.data),
+                    signal_log=str(tmp_path / "signals.json"),
+                    event_log=str(tmp_path / "events.jsonl"))
+    logger = EventLogger(cfg.event_log)
     with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
-        result = scan_market_detailed(market, cfg, StrategyConfig(), Mock(), callback)
-    assert result["coins_scanned"] == 1
-    assert result["valid_count"] == result["app_confirmed_count"] == 0
-    assert result["filtered"][0]["stage"] == "Data"
-    market.klines.assert_called_once()
-    callback.assert_not_called()
+        return scan_market_detailed(market, cfg, DonchianConfig(), logger, open_symbols=set(holding))
+
+
+def test_scan_splits_entries_exits_and_no_action(tmp_path):
+    market = FakeMarket(universe_data())
+    snapshot = scan(market, tmp_path)
+    assert snapshot["coins_scanned"] == 4
+    assert snapshot["universe"] == "Core 10"
+    assert snapshot["entry_count"] == snapshot["valid_count"] == 1
+    assert snapshot["exit_count"] == 1
+    assert snapshot["error_count"] == 0
+    entry = snapshot["signals"][0]
+    assert entry["symbol"] == "BREAKOUTUSDT" and entry["direction"] == "LONG"
+    assert entry["entry_channel"] == 101.0 and entry["stop_distance"] > 0
+    exit_row = snapshot["exit_signals"][0]
+    assert exit_row["symbol"] == "EXITMEUSDT" and exit_row["direction"] == "EXIT"
+    assert exit_row["exit_channel"] == 99.0
+    by_symbol = {row["symbol"]: row for row in snapshot["filtered"]}
+    assert set(by_symbol) == {"HELDUSDT", "FLATUSDT"}
+    assert by_symbol["HELDUSDT"]["stage"] == "Held"
+    assert by_symbol["FLATUSDT"]["stage"] == "Entry"
+    assert market.kline_calls and all(call[1] == "1d" for call in market.kline_calls)
+    assert snapshot["duration_seconds"] > 0
+
+
+def test_stale_scan_is_retained_as_a_data_failure_without_signals(tmp_path):
+    market = FakeMarket({"EOSUSDT": daily(FLAT)})
+    snapshot = scan(market, tmp_path, holding=())
+    assert snapshot["coins_scanned"] == 1
+    assert snapshot["valid_count"] == 0 and snapshot["entry_count"] == 0
+    assert snapshot["filtered"][0]["stage"] == "Data"
+    assert "Stale daily candles" in snapshot["filtered"][0]["reason"]
+
+
+def test_scan_without_holding_never_emits_exit_signals(tmp_path):
+    market = FakeMarket({"EXITMEUSDT": daily(FLAT + [(97, 98, 94, 95)])})
+    snapshot = scan(market, tmp_path, holding=())
+    assert snapshot["exit_count"] == 0
+    assert snapshot["entry_count"] == 0
+    assert snapshot["filtered"][0]["stage"] == "Entry"
 
 
 def test_stale_entry_blocked_before_state_write_or_exchange_call(tmp_path):
-    signal = Mock(symbol="EOSUSDT", signal_close_ms=NOW - HOUR - 1)
-    client, market, logger = Mock(), Mock(), Mock()
-    cfg = BotConfig(state_file=str(tmp_path / "state.json"))
+    cfg = BotConfig(state_file=str(tmp_path / "state.json"), kill_switch_file=str(tmp_path / "STOP"))
+    market, client, logger = Mock(), Mock(), Mock()
     state = {"seen_signals": []}
+    from strategy import Signal
+    sig = Signal(symbol="EOSUSDT", signal_close_ms=BOUNDARY - 1 - DAY_MS,
+                 close_time_utc="2026-01-01T00:00:00Z", direction="LONG", entry=90.0,
+                 entry_channel=85.0, exit_channel=80.0, atr=1.0, stop_distance=2.0)
     with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
-        place_signal(signal, market, client, {}, state, cfg, logger)
+        place_signal(sig, market, client, {}, state, cfg, logger)
     assert state == {"seen_signals": []}
     assert not (tmp_path / "state.json").exists()
     assert not client.mock_calls and not market.mock_calls
     assert logger.emit.call_args.kwargs["reason"] == "stale signal candle"
-
-
-def test_user_lowered_filters_still_work_for_fresh_signal():
-    NOW = int(datetime(2026, 9, 29, 19, tzinfo=timezone.utc).timestamp() * 1000)
-    rows = history(NOW)
-    rows[-1] = Candle(NOW - HOUR, 106, 118, 105, 110, 20, NOW - 1, 2000)
-    cfg = StrategyConfig(app_minimum_surge=0.1, minimum_close_position=0.3)
-    with (
-        patch("strategy.latest_prior_nr7_box", return_value=(105.0, 109.0)),
-        patch("strategy.app_volume_surge", return_value=0.15),
-        patch("strategy.is_stablecoin_at_signal", return_value=False),
-        patch("strategy.strong_pivot_state", return_value=[(True, 140.0)] * len(rows)),
-        patch("strategy.previous_completed_daily", return_value=Candle(0, 105, 115, 105, 110, 1, 0, 1)),
-    ):
-        result = evaluate_latest_detailed("TESTUSDT", rows, cfg, NOW)
-    assert result.signal is not None
-    assert result.signal.app_volume_surge == 0.15
-    assert 0.38 < result.signal.close_position < 0.39
-    assert cfg.app_minimum_surge == 0.1 and cfg.minimum_close_position == 0.3
-

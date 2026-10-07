@@ -87,6 +87,7 @@ def monitor_production_exit(client, market, state, pos, tp_order, sl_order, cfg,
         if sell_qty > 0:
             if sell_qty < rule.min_qty or sell_qty > rule.max_qty:
                 raise RuntimeError("Remaining exit quantity outside symbol lot limits")
+            # Seed kept unchanged so re-derived IDs stay stable across restarts.
             cid = deterministic_id("nr7close", pos.signal_key + ":" + str(len(completed)))
             # Write intent BEFORE sending. If write fails, do not send.
             watch["pending_client_id"] = cid

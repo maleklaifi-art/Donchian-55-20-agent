@@ -1,20 +1,44 @@
+from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import patch
+
+import pytest
 from database import TradeDatabase
 from demo_trader import (
     BotConfig,
     EventLogger,
     TestnetExecutionClient as BinanceTestnetClient,
     allowed_to_trade,
+    deterministic_id,
     floor_step,
     floor_tick,
     ceil_tick,
-    deterministic_id,
-    scan_market_detailed,
 )
 from runtime_settings import SettingsStore
-import strategy
-from strategy import Candle, Evaluation, PhaseOneSignal, Signal, StrategyConfig, evaluate_latest, previous_completed_daily, reward_risk_is_accepted
+from strategy import (
+    DAY_MS,
+    DEFAULT_UNIVERSE_SYMBOLS,
+    Candle,
+    DonchianConfig,
+    evaluate_donchian,
+    is_current_signal_close,
+    wilders_atr,
+    within_entry_grace,
+)
+
+
+def daily(specs, start_day=0):
+    rows = []
+    for i, (o, h, l, c) in enumerate(specs):
+        open_time = (start_day + i) * DAY_MS
+        rows.append(Candle(open_time, o, h, l, c, 10.0, open_time + DAY_MS - 1, 1000.0))
+    return rows
+
+
+FLAT = [(100, 101, 99, 100)] * 60
+N_DAYS = 61
+BOUNDARY = N_DAYS * DAY_MS
+NOW_MS = BOUNDARY + 30_000
+CFG = DonchianConfig()
 
 
 def test_rounding():
@@ -24,243 +48,280 @@ def test_rounding():
 
 
 def test_ids_are_deterministic():
-    assert deterministic_id("nr7e", "ABC") == deterministic_id("nr7e", "ABC")
-    assert deterministic_id("nr7e", "ABC") != deterministic_id("nr7e", "ABD")
+    assert deterministic_id("dce", "ABC") == deterministic_id("dce", "ABC")
+    assert deterministic_id("dce", "ABC") != deterministic_id("dce", "ABD")
 
 
-def test_reward_risk_is_strict_pine_lower_bound_without_upper_cap():
-    assert not reward_risk_is_accepted(1.0)
-    assert reward_risk_is_accepted(1.0000001)
-    assert reward_risk_is_accepted(2.0)
-    assert reward_risk_is_accepted(4.0)
-    assert reward_risk_is_accepted(40.0)
-    assert not reward_risk_is_accepted(float("nan"))
+def test_signal_close_is_exactly_the_daily_boundary():
+    for extra in [0, 30_000, 3_600_000 - 1]:
+        now = BOUNDARY + extra
+        assert is_current_signal_close(BOUNDARY - 1, now)
+        for wrong in [BOUNDARY - 1 - DAY_MS, BOUNDARY - 1 + DAY_MS, BOUNDARY - 2, BOUNDARY]:
+            assert not is_current_signal_close(wrong, now)
 
 
-def test_display_diagnostics_preserve_app_and_indicator_values():
-    phase_one = PhaseOneSignal("TESTUSDT", 1, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.1)
-    evaluation = Evaluation(
-        "TESTUSDT", 10, phase_one, None, "Indicator Volume", "1.2x < 1.5x",
-        indicator_volume_surge=1.2,
-    )
-    row = evaluation.filtered_dict()
-    assert row["phase_one_passed"] is True
-    assert row["app_volume_surge"] == 2.1
-    assert row["indicator_volume_surge"] == 1.2
+def test_entry_grace_window_is_bounded_by_minutes():
+    assert within_entry_grace(BOUNDARY, 15)
+    assert within_entry_grace(BOUNDARY + 15 * 60_000, 15)
+    assert not within_entry_grace(BOUNDARY + 15 * 60_000 + 1, 15)
+    assert not within_entry_grace(BOUNDARY - 1, 15)
 
 
-def test_display_categories_are_filtered_confirmed_and_passed(tmp_path):
-    class FakeMarket:
-        def symbols(self, quote_asset, maximum):
-            return ["FILTEREDUSDT", "CONFIRMEDUSDT", "PASSEDUSDT"]
-
-        def klines(self, symbol, interval, limit):
-            return []
-
-    clock = strategy.datetime(2026, 9, 21, 1, tzinfo=strategy.timezone.utc).timestamp()
-    close_ms = int(clock * 1000) - 1
-    confirmed = PhaseOneSignal("CONFIRMEDUSDT", close_ms, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.1)
-    passed_phase = PhaseOneSignal("PASSEDUSDT", close_ms, "2026-09-21T00:59:59.999Z", 10, 9, 9.5, 8, 2.2)
-    passed_signal = Signal(
-        "PASSEDUSDT", close_ms, "2026-09-21T00:59:59.999Z", 10, 12, 9, 11,
-        13, 2, 9.5, 9, 2.2, 1.8, 0.8, 75, "MEDIUM",
-    )
-    results = {
-        "FILTEREDUSDT": Evaluation("FILTEREDUSDT", 1.0, rejection_stage="NR7", rejection_reason="No completed NR7 box"),
-        "CONFIRMEDUSDT": Evaluation("CONFIRMEDUSDT", 10, confirmed, rejection_stage="Strong High", rejection_reason="Not active"),
-        "PASSEDUSDT": Evaluation("PASSEDUSDT", 10, passed_phase, passed_signal),
-    }
-
-    def evaluate(symbol, candles, config, now_ms):
-        return results[symbol]
-
-    cfg = BotConfig(scan_workers=1, signal_log=str(tmp_path / "signals.json"), event_log=str(tmp_path / "events.jsonl"))
-    with patch("demo_trader.evaluate_latest_detailed", side_effect=evaluate), patch("demo_trader.time.time", return_value=clock):
-        snapshot = scan_market_detailed(FakeMarket(), cfg, StrategyConfig(), EventLogger(cfg.event_log))
-
-    assert snapshot["coins_scanned"] == 3
-    assert snapshot["valid_count"] == 1
-    assert snapshot["app_confirmed_count"] == 2
-    assert snapshot["indicator_rejected_count"] == 1
-    assert [row["symbol"] for row in snapshot["filtered"]] == ["FILTEREDUSDT"]
-    assert snapshot["filtered"][0]["stage"] == "NR7"
-    assert {row["symbol"] for row in snapshot["phase_one"]} == {"CONFIRMEDUSDT", "PASSEDUSDT"}
-    assert snapshot["phase_one"][0]["status"] in {"PASSED", "INDICATOR_NOT_PASSED"}
+def test_wilders_atr_uses_sma_seed_then_wilder_smoothing():
+    candles = daily([(100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100), (108, 115, 105, 110)])
+    # True ranges: 2, 2, 2, then max(10, |115-100|, |105-100|) = 15
+    # SMA seed of first 3 = 2.0, then (2*2 + 15)/3 = 19/3
+    assert wilders_atr(candles, 3) == pytest.approx(19 / 3)
+    assert wilders_atr(candles, 10) is None
 
 
-def test_fast_default_and_exact_hour_schedule_label():
-    settings = SettingsStore("/path/that/does/not/exist/settings.json").get()
+def test_breakout_entry_is_long_with_channels_from_prior_days_only():
+    rows = daily(FLAT + [(108, 115, 105, 110)])
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS, holding=False, universe="Core 10")
+    assert result.rejection_stage is None and result.signal is not None
+    sig = result.signal
+    assert sig.direction == "LONG"
+    assert sig.entry == 110.0
+    # No lookahead: the signal day's own high of 115 never enters the channel.
+    assert sig.entry_channel == 101.0
+    assert sig.exit_channel == 99.0
+    assert sig.signal_close_ms == BOUNDARY - 1
+    assert sig.stop_distance == pytest.approx(2.0 * sig.atr)
+    assert sig.atr > 0
+    assert sig.universe == "Core 10"
+    assert sig.strategy_version == "donchian_55_20_v1"
+
+
+def test_close_equal_to_channel_high_does_not_break_out():
+    rows = daily(FLAT + [(100, 101, 99, 100)])
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS)
+    assert result.signal is None
+    assert result.rejection_stage == "Entry"
+    assert "did not exceed" in result.rejection_reason
+
+
+def test_breakout_outside_the_grace_window_is_rejected():
+    rows = daily(FLAT + [(108, 115, 105, 110)])
+    late = BOUNDARY + 16 * 60_000
+    result = evaluate_donchian("TESTUSDT", rows, CFG, late)
+    assert result.signal is None
+    assert result.rejection_stage == "Entry"
+    assert "entry window" in result.rejection_reason
+
+
+def test_held_position_exits_when_close_breaks_the_20_day_low():
+    rows = daily(FLAT + [(97, 98, 94, 95)])
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS, holding=True)
+    assert result.signal is not None
+    assert result.signal.direction == "EXIT"
+    assert result.signal.exit_channel == 99.0
+    assert result.signal.entry == 95.0
+    assert result.signal.signal_close_ms == BOUNDARY - 1
+
+
+def test_held_position_keeps_it_when_close_stays_above_the_channel():
+    rows = daily(FLAT + [(100, 101, 99, 100)])
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS, holding=True)
+    assert result.signal is None
+    assert result.rejection_stage == "Held"
+    assert result.holding is True
+
+
+def test_held_position_exit_never_requires_the_entry_grace_window():
+    rows = daily(FLAT + [(97, 98, 94, 95)])
+    late = BOUNDARY + 8 * 3_600_000
+    result = evaluate_donchian("TESTUSDT", rows, CFG, late, holding=True)
+    assert result.signal is not None and result.signal.direction == "EXIT"
+
+
+def test_too_little_history_is_a_data_rejection():
+    rows = daily(FLAT[:30])
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS)
+    assert result.signal is None
+    assert result.rejection_stage == "Data"
+    assert "completed daily candles" in result.rejection_reason
+
+
+def test_stale_daily_candles_rejected_before_any_calculation(monkeypatch):
+    rows = daily(FLAT + [(108, 115, 105, 110)])
+    stale_now = NOW_MS + 5 * DAY_MS
+    import strategy
+    called = []
+    monkeypatch.setattr(strategy, "wilders_atr", lambda *a, **k: called.append(1))
+    result = evaluate_donchian("TESTUSDT", rows, CFG, stale_now)
+    assert result.signal is None and result.rejection_stage == "Data"
+    assert "Stale daily candles" in result.rejection_reason
+    assert called == []
+
+
+def test_open_candle_is_ignored_by_the_evaluation():
+    rows = daily(FLAT + [(108, 115, 105, 110)])
+    rows.append(Candle(N_DAYS * DAY_MS, 100, 900, 1, 800, 9999.0, (N_DAYS + 1) * DAY_MS - 1, 9999.0))
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS + 20_000)
+    assert result.signal is not None and result.signal.direction == "LONG"
+
+
+def test_gap_between_daily_candles_is_a_data_rejection():
+    rows = daily(FLAT + [(108, 115, 105, 110)])
+    del rows[-2]
+    rows.insert(0, daily([(100, 101, 99, 100)], start_day=-1)[0])
+    result = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS)
+    assert result.signal is None and result.rejection_stage == "Data"
+    assert "consecutive" in result.rejection_reason
+
+
+def test_filtered_rows_expose_channels_and_reason():
+    rows = daily(FLAT + [(100, 101, 99, 100)])
+    row = evaluate_donchian("TESTUSDT", rows, CFG, NOW_MS).filtered_dict()
+    assert row["symbol"] == "TESTUSDT"
+    assert row["stage"] == "Entry"
+    assert row["entry_channel"] == 101.0
+    assert row["exit_channel"] == 99.0
+    assert row["atr"] > 0
+    assert row["holding"] is False
+
+
+def test_default_settings_schedule_and_universe(tmp_path):
+    settings = SettingsStore(str(tmp_path / "missing.json")).get()
+    assert settings.settings_revision == 5
+    assert settings.starting_capital_usdt == 200.0
+    assert settings.risk_per_trade_pct == 1.0
+    assert (settings.entry_period, settings.exit_period, settings.atr_period, settings.atr_multiplier) == (55, 20, 20, 2.0)
     assert settings.scan_workers == 100
-    assert settings.public_dict()["schedule"] == "Hourly at HH:00 UTC"
+    assert settings.entry_grace_minutes == 15
+    assert settings.active_universe == "Core 10"
+    public = settings.public_dict()
+    assert public["schedule"] == "Daily at 00:00 UTC"
+    assert public["strategy_version"] == "donchian_55_20_v1"
+    assert public["sizing_rule"] == "risk % of equity / (2 x ATR)"
+    assert public["active_universe_symbols"] == DEFAULT_UNIVERSE_SYMBOLS
+    assert public["telegram_bot_token"] == "" and public["telegram_token_configured"] is False
+    for legacy in ["top_n", "app_minimum_surge", "minimum_reward_risk", "supertrend_period", "hourly_history_bars"]:
+        assert legacy not in public
 
 
-def test_existing_default_worker_setting_migrates_once(tmp_path):
+def test_legacy_worker_settings_migrate_to_100_once(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text('{"scan_workers": 8}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
-    assert migrated.scan_workers == 100
-    assert migrated.settings_revision == 4
+    assert migrated.scan_workers == 100 and migrated.settings_revision == 5
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 8})
     assert SettingsStore(str(path)).get().scan_workers == 8
 
-
-def test_previous_fast_worker_default_migrates_to_100_once(tmp_path):
-    path = tmp_path / "settings.json"
     path.write_text('{"settings_revision": 2, "scan_workers": 50}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
-    assert migrated.scan_workers == 100
-    assert migrated.settings_revision == 4
+    assert migrated.scan_workers == 100 and migrated.settings_revision == 5
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 50})
     assert SettingsStore(str(path)).get().scan_workers == 50
 
 
-def test_previous_completed_daily_uses_immediately_prior_utc_day():
-    hour = 3_600_000
-    day = 86_400_000
-    candles = []
-    for d in range(3):
-        for h in range(24):
-            open_time = d * day + h * hour
-            candles.append(Candle(open_time, 100 + d, 110 + d, 90 + d, 105 + d, 1, open_time + hour - 1, 10))
-    signal_index = len(candles) - 1
-    previous = previous_completed_daily(candles, signal_index)
-    assert previous is not None
-    assert previous.open_time == day
-    assert previous.high == 111
-    assert previous.low == 91
-    assert previous.close == 106
+def test_old_settings_file_clamps_capital_into_the_documented_range(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text('{"settings_revision": 4, "starting_capital_usdt": 5, "top_n": 777}', encoding="utf-8")
+    loaded = SettingsStore(str(path)).get()
+    assert loaded.starting_capital_usdt == 10.0
+    assert loaded.settings_revision == 5
+    assert "top_n" not in loaded.public_dict()
 
 
-def test_evaluate_latest_uses_fixed_r2_and_no_upper_rr_cap():
-    hour = 3_600_000
-    candles = []
-    for i in range(240):
-        open_time = (i + 48) * hour
-        candles.append(Candle(open_time, 100, 101, 99, 100, 1, open_time + hour - 1, 10))
-    open_time = 288 * hour
-    candles.append(Candle(open_time, 106, 111, 105, 110, 2, open_time + hour - 1, 20))
-    now_ms = candles[-1].close_time + 1
-
-    for previous_daily, expected_tp, expected_rr in [
-        (Candle(0, 105, 115, 105, 110, 1, 0, 1), 120.0, 10.0),
-        (Candle(0, 110, 120, 100, 110, 1, 0, 1), 130.0, 20.0),
-    ]:
-        with (
-            patch.object(strategy, "latest_prior_nr7_box", return_value=(105.0, 109.0)),
-            patch.object(strategy, "app_volume_surge", return_value=2.0),
-            patch.object(strategy, "is_stablecoin_at_signal", return_value=False),
-            patch.object(strategy, "strong_pivot_state", return_value=[(True, 140.0)] * len(candles)),
-            patch.object(strategy, "previous_completed_daily", return_value=previous_daily),
-        ):
-            signal = evaluate_latest("TESTUSDT", candles, StrategyConfig(), now_ms)
-        assert signal is not None
-        assert signal.tp == expected_tp
-        assert signal.rr == expected_rr
-        assert signal.strong_high_filter == 140.0
+INVALID_SETTINGS = [
+    {"risk_per_trade_pct": 0},
+    {"risk_per_trade_pct": 11},
+    {"entry_period": 9},
+    {"exit_period": 4},
+    {"starting_capital_usdt": 9},
+    {"starting_capital_usdt": 2_000_000},
+    {"entry_grace_minutes": 0},
+    {"atr_multiplier": 0},
+    {"active_universe": "Missing"},
+    {"universes": []},
+    {"universes": [{"name": "A", "symbols": ["BTC"]}]},
+    {"universes": [{"name": "A", "symbols": ["BTCUSDT"]}, {"name": "a", "symbols": ["ETHUSDT"]}]},
+]
 
 
-def test_closed_signal_values_are_frozen_during_following_hour():
-    hour = 3_600_000
-    candles = []
-    for i in range(240):
-        open_time = (i + 48) * hour
-        candles.append(Candle(open_time, 100, 101, 99, 100, 1, open_time + hour - 1, 10))
-    breakout_open = 288 * hour
-    breakout = Candle(breakout_open, 106, 111, 105, 110, 2, breakout_open + hour - 1, 20)
-    live = Candle(289 * hour, 110, 999, 1, 500, 999, 290 * hour - 1, 9999)
-    candles.extend([breakout, live])
-    previous_daily = Candle(0, 105, 115, 105, 110, 1, 0, 1)
-    with (
-        patch.object(strategy, "latest_prior_nr7_box", return_value=(105.0, 109.0)),
-        patch.object(strategy, "app_volume_surge", return_value=2.0),
-        patch.object(strategy, "is_stablecoin_at_signal", return_value=False),
-        patch.object(strategy, "strong_pivot_state", return_value=[(True, 140.0)] * len(candles)),
-        patch.object(strategy, "previous_completed_daily", return_value=previous_daily),
-    ):
-        at_0100 = evaluate_latest("TESTUSDT", candles, StrategyConfig(), breakout.close_time + 1)
-        at_0102 = evaluate_latest("TESTUSDT", candles, StrategyConfig(), breakout.close_time + 120_001)
-    assert at_0100 is not None
-    assert at_0102 is not None
-    assert at_0100.to_dict() == at_0102.to_dict()
+@pytest.mark.parametrize("bad", INVALID_SETTINGS)
+def test_invalid_settings_are_rejected(tmp_path, bad):
+    store = SettingsStore(str(tmp_path / "settings.json"))
+    with pytest.raises((ValueError, TypeError)):
+        store.update(bad)
+    assert SettingsStore(str(tmp_path / "settings.json")).get().settings_revision == 5
 
 
-def test_settings_persist_new_lower_bound_and_ignore_legacy_upper_cap(tmp_path):
+def test_universe_edits_round_trip_and_rename_symbols(tmp_path):
     path = tmp_path / "settings.json"
     store = SettingsStore(str(path))
-    store.update({"top_n": 777, "minimum_reward_risk": 4.1, "maximum_reward_risk": 4.0})
-    assert SettingsStore(str(path)).get().minimum_reward_risk == 4.1
-    assert SettingsStore(str(path)).get().top_n == 777
-    assert "maximum_reward_risk" not in store.get().public_dict()
+    value = store.update({
+        "universes": [{"name": "Majors", "symbols": [" btcusdt ", "ethusdt", "BTCUSDT"]}],
+        "active_universe": "majors",
+    })
+    assert value.universes == [{"name": "Majors", "symbols": ["BTCUSDT", "ETHUSDT"]}]
+    assert value.active_universe == "majors"
+    reloaded = SettingsStore(str(path)).get()
+    assert reloaded.universes == value.universes
+    assert reloaded.public_dict()["active_universe_symbols"] == ["BTCUSDT", "ETHUSDT"]
 
 
-def test_previous_trade_does_not_block_another_entry(tmp_path):
+def test_kill_switch_and_daily_loss_limit_block_only_new_entries(tmp_path):
     cfg = BotConfig(kill_switch_file=str(tmp_path / "STOP"))
     logger = EventLogger(str(tmp_path / "events.jsonl"))
-    state = {
-        "open_positions": {},
-        "realized": [{"opened_at": strategy.datetime.now(strategy.timezone.utc).isoformat(), "r": 2.0}],
-    }
+    state = {"open_positions": {}, "realized": [], "executed_entries": []}
+    assert allowed_to_trade(state, cfg, logger)
+
+    state["realized"] = [{"day": datetime.now(timezone.utc).date().isoformat(), "r": -3.0}]
+    assert not allowed_to_trade(state, cfg, logger)
+    state["realized"] = [{"day": "2020-01-01", "r": -3.0}]
+    assert allowed_to_trade(state, cfg, logger)
+
+    state["realized"] = []
+    (tmp_path / "STOP").touch()
+    assert not allowed_to_trade(state, cfg, logger)
+
+
+def test_previous_trade_and_execution_ledger_do_not_block_entries(tmp_path):
+    cfg = BotConfig(kill_switch_file=str(tmp_path / "STOP"))
+    logger = EventLogger(str(tmp_path / "events.jsonl"))
+    today = datetime.now(timezone.utc).isoformat()
+    state = {"open_positions": {}, "executed_entries": [{"signal_key": "AAAUSDT:1", "opened_at": today}],
+             "realized": [{"opened_at": today, "r": 2.0, "pnl_usdt": 4.0}]}
     assert allowed_to_trade(state, cfg, logger)
 
 
-def test_execution_ledger_does_not_impose_daily_trade_count_cap(tmp_path):
-    cfg = BotConfig(kill_switch_file=str(tmp_path / "STOP"))
-    logger = EventLogger(str(tmp_path / "events.jsonl"))
-    state = {
-        "executed_entries": [{
-            "signal_key": "TESTUSDT:1",
-            "opened_at": strategy.datetime.now(strategy.timezone.utc).isoformat(),
-        }],
-        "open_positions": {},
-        "realized": [],
-    }
-    assert allowed_to_trade(state, cfg, logger)
-
-
-def test_current_binance_oco_request_shape():
-    client = object.__new__(BinanceTestnetClient)
-    with patch.object(BinanceTestnetClient, "_signed", return_value={"orderListId": 1}) as signed:
-        response = client.sell_oco_market_triggers("TESTUSDT", "1", "120", "90", "nr7-list")
-    assert response["orderListId"] == 1
-    method, path, params = signed.call_args.args
-    assert method == "POST"
-    assert path == "/api/v3/orderList/oco"
-    assert params["aboveType"] == "TAKE_PROFIT"
-    assert params["aboveStopPrice"] == "120"
-    assert params["belowType"] == "STOP_LOSS"
-    assert params["belowStopPrice"] == "90"
+def test_testnet_client_never_exposes_protective_order_methods():
+    # The spec forbids stop/OCO orders: exits are channel closes only.
+    assert not hasattr(BinanceTestnetClient, "sell_oco_market_triggers")
+    assert not hasattr(BinanceTestnetClient, "oco_order")
 
 
 def test_dashboard_database_open_close_lifecycle(tmp_path):
     db = TradeDatabase(str(tmp_path / "trades.sqlite3"))
-    now = strategy.datetime.now(strategy.timezone.utc).isoformat()
-    signal = {
+    now = datetime.now(timezone.utc).isoformat()
+    db.upsert_signal({
         "symbol": "TESTUSDT", "signal_close_ms": 1, "close_time_utc": now,
-        "entry": 100.0, "tp": 120.0, "sl": 90.0, "rr": 2.0,
-        "box_high": 99.0, "box_low": 90.0, "classic_pivot": 110.0,
-        "strong_high_filter": 125.0, "app_volume_surge": 2.0,
-        "indicator_volume_surge": 2.0, "close_position": 0.8,
-        "confidence_score": 75, "confidence_level": "MEDIUM",
-    }
-    db.upsert_signal(signal)
+        "entry": 100.0, "entry_channel": 95.0, "exit_channel": 90.0,
+        "atr": 2.0, "stop_distance": 4.0, "direction": "LONG",
+        "universe": "Core 10", "strategy_version": "donchian_55_20_v1",
+    })
+    assert db.signals()[0]["status"] == "VALID"
     db.open_trade({
         "signal_key": "TESTUSDT:1", "symbol": "TESTUSDT", "entry_price": 100.0,
-        "quantity": 0.2, "tp": 120.0, "sl": 90.0, "rr": 2.0,
-        "risk_usdt": 2.0, "opened_at": now,
+        "quantity": 0.2, "risk_usdt": 2.0, "opened_at": now,
+        "atr": 2.0, "entry_channel": 95.0, "exit_channel": 90.0,
     })
     assert db.stats()["open_count"] == 1
+    assert db.signals()[0]["status"] == "TRADED"
     db.close_trade({
-        "signal_key": "TESTUSDT:1", "outcome": "TP", "exit_price": 120.0,
-        "quantity": 0.2, "pnl_usdt": 4.0, "pnl_pct": 20.0,
-        "realized_r": 2.0, "closed_at": now,
+        "signal_key": "TESTUSDT:1", "outcome": "CHANNEL_EXIT", "exit_price": 90.0,
+        "quantity": 0.2, "pnl_usdt": -2.0, "pnl_pct": -10.0,
+        "realized_r": -1.0, "closed_at": now,
     })
     stats = db.stats()
     assert stats["open_count"] == 0
-    assert stats["wins"] == 1
-    assert stats["realized_pnl_usdt"] == 4.0
-    assert stats["realized_r"] == 2.0
-
+    assert stats["losses"] == 1
+    assert stats["realized_pnl_usdt"] == -2.0
+    assert stats["realized_r"] == -1.0
+    assert db.closed_trades()[0]["outcome"] == "CHANNEL_EXIT"

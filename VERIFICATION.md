@@ -1,34 +1,39 @@
-# Verification — sizing, exclusions and history preservation (2026-10-07)
+# Verification — Donchian 55/20 rewrite (2026-10-07)
 
 Run from the repository root:
 
 ```bash
-python -m pip install -r requirements.txt pytest==8.3.5
+python -m pip install -r requirements.txt pytest
 python -m pytest -q
 node tests/check_dashboard_render.cjs
 ```
 
-Local result: **94 passed**, plus the offline dashboard rendering check. Exchange calls in the tests are simulated; no trading credentials or real orders were used.
+Local result: **102 passed**, plus the offline dashboard rendering/settings/balance check. Exchange calls in the tests are simulated; no trading credentials or real orders were used.
 
 Covered behavior:
 
-- Supplied Pine's strict R:R lower bound, no upper cap, fixed daily R2/box-low prices.
-- Hand-calculated custom Supertrend flips, carried trend and equality boundaries.
-- UTC closing-boundary Sunday/Monday exclusions and strict decimal 2.56% stop boundaries.
-- Separate App/Pine zero-volume bypass, safe confidence arithmetic, JSON save/reload and revision-4 migration.
-- Fresh closed candles, stale/missing data rejection, original status categories and symbol eligibility checks.
-- Risk-based sizing, absolute $100 order cap even with a larger configured cap, $2 planned risk cap, available capital, multiple positions, duplicate protection, and existing kill switch/daily loss controls.
-- All 13 user-specified pairs excluded before top-N ranking and blocked at new-order submission; rejected excluded signals leave existing state unchanged.
-- Signal R:R matches Passed while preserving fill entry/risk; legacy records without a signal use a clearly labelled fill-R:R fallback.
-- Closed database and signal rows survive restart plus stale open/realized backfill without modification. Existing recovery of a missed close remains covered.
-- TP touch followed by reversal, stop first, native fill/cancel race, partial fills, lost sell response followed by state reload, cancel failure, cursor continuation and no fabricated fills.
-- Recovery of a closed state record into an existing OPEN dashboard row; win/loss counts use gross P&L sign.
-- Local HTTP health/auth/CSRF/settings integration. Zero values round-trip through `/api/config`; old upper-RR UI is absent; new ST controls connect to runtime configuration.
+- Donchian entry: just-closed daily close strictly above the previous 55-day high, signal day excluded, exact `00:00 UTC` daily boundary, no lookahead.
+- Donchian exit: held position with daily close strictly below the previous 20-day low, channel-equal closes rejected, exits accepted without a grace window.
+- Entry grace window (default 15 minutes) acceptance and rejection.
+- Wilder ATR(20) hand-checked values (19/3 seed), ATR-driven sizing `qty = (equity × 1%) / (2 × ATR)` with notional caps ($100 max, available × 0.995, capital cap).
+- Stale, short, gapped and open-candle data rejected before any strategy calculation; open daily candle ignored; consecutive-candle integrity.
+- Signal identity `symbol:daily_close_ms`, exactly-once state, stale signals rejected before any state write or exchange call.
+- Universe resolution through `exchangeInfo`: requested order preserved, non-TRADING/non-spot/wrong-quote pairs dropped, stablecoin/fiat exclusions, no ticker fallback.
+- Scan snapshot split into Entry signals / Exit signals / No action with stage + reason, plus Data failures, and a flat universe emitting no exit signals.
+- Multiple simultaneous positions, duplicate-symbol blocking, kill switch file and daily -3R limit blocking only new entries.
+- Channel exit flattens exactly once and records `CHANNEL_EXIT` with entry and exit signal keys; realized P&L feeds balance.
+- Legacy OCO positions still reconciled; new Donchian positions are left untouched by the legacy monitor.
+- Closed database and signal rows survive restart plus stale open/realized backfill without modification.
+- Local HTTP health/auth/CSRF/settings integration: old `nr7_session` cookie rejected, `donchian_session` accepted, CSRF required.
+- Settings API: capital, risk %, entry/exit periods, ATR period/multiplier, history length, grace, scan workers round trip; invalid values rejected with 400; legacy NR7 knobs cannot be reinstated.
+- Named universes round trip (create/activate/unknown-active rejected) and are applied to the engine's scan config.
+- Capital change preserves strategy settings and Closed/open rows; 500 capital + 10 P&L = 510 balance; restart does not double-count; negative close replayed once; invalid capitals (0, negative, boolean, NaN, Infinity) rejected.
+- Daily scheduler targets `00:00 UTC + 10s` settle delay.
+- Railway entries blocked without a mounted `/data` volume; exit readiness independent of it.
+- Dashboard DOM-ID invariant: every `$('id')` reference exists in the markup; NR7/Supertrend wording absent; open/closed/entry/exit/no-action rendering, settings inputs, universe controls, balance/equity and before-fee labelling.
 
 Also passed Python compilation, JavaScript syntax validation with `node --check`, dashboard DOM-ID checks, and `git diff --check`.
 
-Not verified here: an authenticated Testnet execution, the specific historical DUSK trade, a Railway deployment, TradingView compilation, or bar-by-bar TradingView parity. No new backtest return is claimed. Production data and Testnet fills differ; polling is not instantaneous. Read the exact rules and limitations in `docs/NR7_AGENT_STRATEGY_HANDOFF.md`.
-
-Capital/accounting extension: settings API saves and reloads editable capital, rejects zero/negative/non-finite values, preserves strategy settings and trade rows, and updates balance/equity immediately. Tests cover positive/negative P&L funding subsequent orders, reduced capital retaining current positions, database-ledger sizing, restart without double-counting, and blocking Railway entries without a data mount. Dashboard rendering checks verify the capital input, balance, equity and before-fee labelling.
+Not verified here: an authenticated Testnet execution, a Railway deployment, or a forward backtest return. No profitability claim is made. Production data and Testnet fills differ; polling is not instantaneous.
 
 Live volume provisioning and deployment remain pending owner approval; local restart tests are not a claim that Railway currently has persistent storage.

@@ -6,7 +6,6 @@ import os
 import secrets
 import threading
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,13 +15,12 @@ from urllib.parse import parse_qs
 
 from database import TradeDatabase
 from demo_trader import (
-    BotConfig,
     MAX_POSITION_NOTIONAL_USDT,
-    MAX_TRADE_RISK_USDT,
+    BotConfig,
     EventLogger,
     PublicMarketClient,
-    StrategyConfig,
     TestnetExecutionClient,
+    close_position,
     demo_balance_usdt,
     load_config,
     load_rules,
@@ -32,7 +30,7 @@ from demo_trader import (
     sync_positions,
 )
 from runtime_settings import RuntimeSettings, SettingsStore
-from strategy import is_current_signal_close
+from strategy import DonchianConfig, Signal, is_current_signal_close
 
 
 def utc_now():
@@ -45,9 +43,13 @@ def as_bool(value: Optional[str], default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def next_hour_boundary(now_seconds: float) -> int:
-    """Next exact UTC hour boundary as an epoch second."""
-    return (int(now_seconds // 3600) + 1) * 3600
+def next_day_boundary(now_seconds: float) -> int:
+    """Next 00:00 UTC boundary plus a settle delay, as an epoch second.
+
+    The delay lets Binance finalize the just-closed daily candle before the
+    Donchian evaluation reads it.
+    """
+    return (int(now_seconds // 86_400) + 1) * 86_400 + 10
 
 
 class DashboardLogger(EventLogger):
@@ -59,9 +61,9 @@ class DashboardLogger(EventLogger):
         super().emit(event, **payload)
         try:
             self.db.record_event(event, payload)
-            if event == "VALID_SIGNAL":
+            if event in {"VALID_SIGNAL", "EXIT_SIGNAL"}:
                 self.db.upsert_signal(payload)
-            elif event == "TRADE_REJECTED":
+            elif event in {"TRADE_REJECTED", "EXIT_REJECTED"}:
                 sk = payload.get("signal_key")
                 if sk:
                     self.db.mark_signal(sk, "REJECTED", payload.get("reason"))
@@ -82,7 +84,6 @@ class CloudDemoEngine:
         self.cfg = cfg
         self.db = db
         self.settings_store = settings_store
-        self.cfg.demo_equity_cap_usdt = settings_store.get().starting_capital_usdt
         self.logger = DashboardLogger(cfg.event_log, db)
         self.market = PublicMarketClient(cfg.request_timeout_s)
         self.state_lock = threading.RLock()
@@ -113,13 +114,10 @@ class CloudDemoEngine:
         self.last_scan_snapshot = {
             "duration_seconds": 0.0,
             "coins_scanned": 0,
-            "app_confirmed_count": 0,
             "valid_count": 0,
-            "indicator_rejected_count": 0,
             "error_count": 0,
-            "phase_one": [],
             "signals": [],
-            "rejected": [],
+            "exit_signals": [],
             "filtered": [],
         }
         self.telegram_alerted_file = Path(cfg.signal_log).with_name("telegram_alerted.json")
@@ -131,6 +129,7 @@ class CloudDemoEngine:
             self.telegram_alerted = set()
         self.next_scan_at_ms = 0
         self.started_at = utc_now()
+        self.strategy_config = self._apply_settings(settings_store.get())
         self._configure_execution()
         with self.state_lock:
             self.db.backfill_state(load_state(self.cfg.state_file))
@@ -157,8 +156,8 @@ class CloudDemoEngine:
             self.logger.emit("EXECUTION_INIT_ERROR", error=str(exc))
 
     def start(self):
-        threading.Thread(target=self._monitor_loop, name="nr7-monitor", daemon=True).start()
-        threading.Thread(target=self._scanner_loop, name="nr7-scanner", daemon=True).start()
+        threading.Thread(target=self._monitor_loop, name="donchian-monitor", daemon=True).start()
+        threading.Thread(target=self._scanner_loop, name="donchian-scanner", daemon=True).start()
 
     def set_new_entries_enabled(self, enabled: bool):
         kill = Path(self.cfg.kill_switch_file)
@@ -178,38 +177,45 @@ class CloudDemoEngine:
         return not self.storage_error and not Path(self.cfg.kill_switch_file).exists()
 
     def _scanner_loop(self):
+        # First run happens immediately: after a restart it must still flatten
+        # positions whose daily exit signal fired while the process was down.
         while not self.stop_event.is_set():
             self._run_scan()
             now = time.time()
-            next_hour = next_hour_boundary(now)
+            next_day = next_day_boundary(now)
             with self.meta_lock:
-                self.next_scan_at_ms = int(next_hour * 1000)
+                self.next_scan_at_ms = int(next_day * 1000)
             self.scan_wakeup.clear()
-            self.scan_wakeup.wait(timeout=max(15.0, next_hour - now))
+            self.scan_wakeup.wait(timeout=max(15.0, next_day - now))
 
-    def _apply_settings(self, settings: RuntimeSettings):
-        self.cfg.max_symbols = settings.top_n
-        self.cfg.hourly_history_bars = settings.hourly_history_bars
+    def _apply_settings(self, settings: RuntimeSettings) -> DonchianConfig:
+        active = next(
+            (u for u in settings.universes if u["name"].lower() == settings.active_universe.lower()),
+            None,
+        )
+        self.cfg.universe_name = active["name"] if active else settings.active_universe
+        self.cfg.universe_symbols = list(active["symbols"]) if active else []
         self.cfg.scan_workers = settings.scan_workers
-        return StrategyConfig(
-            app_minimum_surge=settings.app_minimum_surge,
-            indicator_volume_lookback=settings.indicator_volume_lookback,
-            indicator_minimum_surge=settings.indicator_minimum_surge,
-            minimum_close_position=settings.minimum_close_position,
-            pine_minimum_reward_risk=settings.minimum_reward_risk,
-            minimum_reward_risk=settings.minimum_reward_risk,
-            supertrend_period=settings.supertrend_period,
-            supertrend_multiplier=settings.supertrend_multiplier,
-            supertrend_wilder=settings.supertrend_wilder,
-            swing_length=settings.swing_length,
+        self.cfg.daily_history_bars = settings.daily_history_bars
+        self.cfg.risk_per_trade_pct = settings.risk_per_trade_pct
+        self.cfg.entry_grace_minutes = settings.entry_grace_minutes
+        # Capital is a funding adjustment, never a reset of trade P&L.
+        self.cfg.demo_equity_cap_usdt = settings.starting_capital_usdt
+        return DonchianConfig(
+            entry_period=settings.entry_period,
+            exit_period=settings.exit_period,
+            atr_period=settings.atr_period,
+            atr_multiplier=settings.atr_multiplier,
+            risk_pct=settings.risk_per_trade_pct,
+            daily_history_bars=settings.daily_history_bars,
+            entry_grace_minutes=settings.entry_grace_minutes,
         )
 
     def update_settings(self, raw: dict):
         # Serialize funding changes with order submission and exit accounting.
-        # Changing capital is a funding adjustment, never a reset of trade P&L.
         with self.state_lock:
             value = self.settings_store.update(raw)
-            self.cfg.demo_equity_cap_usdt = value.starting_capital_usdt
+            self.strategy_config = self._apply_settings(value)
         self.logger.emit("SETTINGS_UPDATED", settings=value.public_dict())
         return value
 
@@ -227,38 +233,24 @@ class CloudDemoEngine:
             self.last_scan_started = utc_now()
             self.last_scan_error = None
 
-        def on_signal(sig):
-            sk = f"{sig.symbol}:{sig.signal_close_ms}"
-            if self.storage_error:
-                self.logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=sk, reason=self.storage_error)
-                return
-            if not self.execution_ready or self.exec_client is None:
-                self.logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=sk, reason="testnet execution unavailable")
-                return
-            with self.state_lock:
-                state = load_state(self.cfg.state_file)
-                self.db.backfill_state(state)
-                place_signal(
-                    sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger,
-                    strategy_config.minimum_reward_risk,
-                    strategy_config.maximum_reward_risk,
-                    realized_pnl_usdt=self.db.stats()["realized_pnl_usdt"],
-                )
-
         try:
             settings = self.settings_store.get()
-            strategy_config = self._apply_settings(settings)
+            self.strategy_config = self._apply_settings(settings)
+            with self.state_lock:
+                state = load_state(self.cfg.state_file)
             snapshot = scan_market_detailed(
                 self.market,
                 self.cfg,
-                strategy_config,
+                self.strategy_config,
                 self.logger,
-                on_signal=on_signal,
+                open_symbols=set(state.get("open_positions", {})),
             )
             with self.meta_lock:
                 self.last_scan_snapshot = snapshot
                 self.last_scan_completed = utc_now()
             self._send_telegram_snapshot(settings, snapshot)
+            if self.execution_ready and self.exec_client is not None:
+                self._execute_snapshot(snapshot)
         except Exception as exc:
             with self.meta_lock:
                 self.last_scan_error = str(exc)
@@ -267,11 +259,40 @@ class CloudDemoEngine:
             with self.meta_lock:
                 self.scan_in_progress = False
 
+    def _execute_snapshot(self, snapshot: dict):
+        """Exits first (frees capital), then entries, all in one state batch."""
+        with self.state_lock:
+            state = load_state(self.cfg.state_file)
+            self.db.backfill_state(state)
+            realized = self.db.stats()["realized_pnl_usdt"]
+            for row in snapshot.get("exit_signals", []):
+                if self.storage_error:
+                    continue
+                try:
+                    close_position(Signal(**row), self.market, self.exec_client, self.rules, state, self.cfg, self.logger)
+                except Exception as exc:
+                    self.logger.emit("EXIT_ERROR", symbol=row.get("symbol"), error=str(exc))
+            for row in snapshot.get("signals", []):
+                sig = Signal(**row)
+                if self.storage_error:
+                    self.logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=f"{sig.symbol}:{sig.signal_close_ms}", reason=self.storage_error)
+                    continue
+                try:
+                    place_signal(
+                        sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger,
+                        realized_pnl_usdt=realized,
+                    )
+                except Exception as exc:
+                    self.logger.emit("ENTRY_ERROR", symbol=sig.symbol, error=str(exc))
+
     def _send_telegram_snapshot(self, settings: RuntimeSettings, snapshot: dict):
         if not settings.telegram_enabled or not settings.telegram_bot_token or not settings.telegram_chat_id:
             return
-        for signal in snapshot.get("signals", []):
-            if not is_current_signal_close(signal["signal_close_ms"], int(time.time() * 1000)):
+        now_ms = int(time.time() * 1000)
+        alerts = [("DONCHIAN 55/20 BREAKOUT", s) for s in snapshot.get("signals", [])]
+        alerts += [("DONCHIAN EXIT CHANNEL BREAK", s) for s in snapshot.get("exit_signals", [])]
+        for headline, signal in alerts:
+            if not is_current_signal_close(signal["signal_close_ms"], now_ms):
                 continue
             signal_key = f"{signal['symbol']}:{signal['signal_close_ms']}"
             if signal_key in self.telegram_alerted:
@@ -279,11 +300,12 @@ class CloudDemoEngine:
             try:
                 import requests
                 message = (
-                    f"VALID NR7 SIGNAL\n{signal['symbol']}\n"
-                    f"Entry: {signal['entry']:.12g}\nTP R2: {signal['tp']:.12g}\n"
-                    f"SL: {signal['sl']:.12g}\nR:R: {signal['rr']:.2f}\n"
-                    f"App volume: {signal['app_volume_surge']:.2f}x\n"
-                    f"168H volume: {signal['indicator_volume_surge']:.2f}x"
+                    f"{headline}\n{signal['symbol']}\n"
+                    f"Daily close: {signal['entry']:.12g}\n"
+                    f"55-day high: {signal['entry_channel']:.12g}\n"
+                    f"20-day low: {signal['exit_channel']:.12g}\n"
+                    f"ATR({settings.atr_period}): {signal['atr']:.12g}\n"
+                    f"Sizing distance: {signal['stop_distance']:.12g} (2 x ATR)"
                 )
                 response = requests.post(
                     f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
@@ -354,11 +376,19 @@ class CloudDemoEngine:
             px = self.live_prices.get(t["symbol"]) or t.get("current_price") or t.get("entry_price") or 0.0
             entry = float(t.get("entry_price") or 0)
             qty = float(t.get("quantity") or 0)
+            try:
+                stored = json.loads(t.get("payload_json") or "{}")
+            except Exception:
+                stored = {}
             t["current_price"] = px
             t["unrealized_pnl_usdt"] = (px - entry) * qty
             t["unrealized_pct"] = ((px / entry) - 1.0) * 100.0 if entry > 0 and px > 0 else 0.0
-            t["distance_to_tp_pct"] = ((float(t.get("tp") or 0) / px) - 1.0) * 100.0 if px > 0 and t.get("tp") else None
-            t["distance_to_sl_pct"] = ((float(t.get("sl") or 0) / px) - 1.0) * 100.0 if px > 0 and t.get("sl") else None
+            # Donchian channels are carried in the trade payload, not columns.
+            t["entry_channel"] = stored.get("entry_channel", t.get("entry_channel"))
+            t["exit_channel"] = stored.get("exit_channel", t.get("exit_channel"))
+            t["atr"] = stored.get("atr", t.get("atr"))
+            exit_channel = t.get("exit_channel")
+            t["distance_to_exit_pct"] = ((px / float(exit_channel)) - 1.0) * 100.0 if px > 0 and exit_channel else None
             unrealized += t["unrealized_pnl_usdt"]
             open_risk += float(t.get("risk_usdt") or 0)
             open_value += px * qty
@@ -373,6 +403,7 @@ class CloudDemoEngine:
         stats["available_demo_cash_usdt"] = max(0.0, balance - open_cost)
         stats["estimated_testnet_equity_usdt"] = raw_equity
 
+        settings = self.settings_store.get()
         with self.meta_lock:
             meta = {
                 "service_running": True,
@@ -396,30 +427,30 @@ class CloudDemoEngine:
         return {
             "meta": meta,
             "risk": {
-                "risk_per_trade_usdt": min(MAX_TRADE_RISK_USDT, self.cfg.risk_per_trade_usdt),
+                "risk_per_trade_pct": settings.risk_per_trade_pct,
+                "sizing_rule": "risk % of equity / (2 x ATR)",
                 "max_position_notional_usdt": min(MAX_POSITION_NOTIONAL_USDT, self.cfg.max_position_notional_usdt),
-                "max_open_positions": None,
-                "max_trades_per_utc_day": None,
-                "max_total_open_risk_usdt": None,
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
-                "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
                 "starting_capital_usdt": self.cfg.demo_equity_cap_usdt,
+                "entry_period": settings.entry_period,
+                "exit_period": settings.exit_period,
+                "atr_period": settings.atr_period,
+                "atr_multiplier": settings.atr_multiplier,
+                "entry_grace_minutes": settings.entry_grace_minutes,
+                "schedule": "Daily at 00:00 UTC",
             },
             "stats": stats,
             "open_trades": open_trades,
             "closed_trades": self.db.closed_trades(100),
             "rejected_signals": self.db.signals("REJECTED", 60),
-            "indicator_rejections": self.last_scan_snapshot.get("rejected", []),
-            "filter_rejections": self.last_scan_snapshot.get("filtered", []),
-            "trade_signals": self.last_scan_snapshot.get("phase_one", []),
-            "passed_signals": self.last_scan_snapshot.get("signals", []),
-            "confirmed_signals": self.last_scan_snapshot.get("phase_one", []),
-            "filtered_signals": self.last_scan_snapshot.get("filtered", []),
+            "entry_signals": self.last_scan_snapshot.get("signals", []),
+            "exit_signals": self.last_scan_snapshot.get("exit_signals", []),
+            "no_action": self.last_scan_snapshot.get("filtered", []),
             "recent_signals": self.db.signals(None, 60),
             "recent_events": self.db.recent_events(60),
             "scan": self.last_scan_snapshot,
-            "settings": self.settings_store.get().public_dict(),
+            "settings": settings.public_dict(),
         }
 
 ROOT = Path(__file__).resolve().parent
@@ -469,7 +500,7 @@ def get_session(cookie_header: str):
         jar.load(cookie_header)
     except Exception:
         return None, None
-    morsel = jar.get("nr7_session")
+    morsel = jar.get("donchian_session")
     if not morsel:
         return None, None
     sid = morsel.value
@@ -498,7 +529,7 @@ def render_dashboard(csrf: str):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "NR7CloudDemo/1.0"
+    server_version = "DonchianCloudDemo/1.0"
 
     def log_message(self, fmt, *args):
         print(json.dumps({"time": utc_now(), "event": "HTTP", "message": fmt % args}), flush=True)
@@ -567,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
             form = self._read_form()
             if secrets.compare_digest(form.get("password", ""), DASHBOARD_PASSWORD):
                 sid, rec = make_session()
-                flags = [f"nr7_session={sid}", "Path=/", "HttpOnly", "SameSite=Strict", f"Max-Age={SESSION_TTL_S}"]
+                flags = [f"donchian_session={sid}", "Path=/", "HttpOnly", "SameSite=Strict", f"Max-Age={SESSION_TTL_S}"]
                 if COOKIE_SECURE:
                     flags.append("Secure")
                 return self._redirect("/", {"Set-Cookie": "; ".join(flags)})
@@ -576,7 +607,7 @@ class Handler(BaseHTTPRequestHandler):
             if sid:
                 with SESSIONS_LOCK:
                     SESSIONS.pop(sid, None)
-            return self._redirect("/login", {"Set-Cookie": "nr7_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
+            return self._redirect("/login", {"Set-Cookie": "donchian_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
         if not sess:
             return self._json(401, {"error": "unauthorized"})
         csrf = self.headers.get("X-CSRF-Token", "")
@@ -608,6 +639,7 @@ if __name__ == "__main__":
         "port": port,
         "data_dir": str(DATA_DIR),
         "mode": "BINANCE_SPOT_TESTNET_ONLY",
+        "strategy": "donchian_55_20_v1",
         "default_password_warning": INSECURE_DEFAULT_PASSWORD,
     }), flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
@@ -618,4 +650,3 @@ if __name__ == "__main__":
     finally:
         engine.stop_event.set()
         server.server_close()
-

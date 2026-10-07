@@ -1,15 +1,17 @@
 {
-  "max_symbols": 1000,
   "scan_workers": 100,
-  "hourly_history_bars": 1000,
+  "daily_history_bars": 120,
   "quote_asset": "USDT",
 
-  "risk_per_trade_usdt": 2.0,
+  "universe_name": "Core 10",
+  "universe_symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT"],
+
+  "risk_per_trade_pct": 1.0,
   "daily_loss_limit_r": 3.0,
   "max_position_notional_pct": 100.0,
   "max_position_notional_usdt": 100.0,
-  "max_entry_drift_pct": 0.30,
   "demo_equity_cap_usdt": 200.0,
+  "entry_grace_minutes": 15,
 
   "request_timeout_s": 15,
   "recv_window_ms": 5000,
@@ -18,4 +20,3 @@
   "signal_log": "signals.json",
   "kill_switch_file": "STOP_TRADING"
 }
-

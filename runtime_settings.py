@@ -5,28 +5,31 @@ import math
 import os
 import tempfile
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
+
+from strategy import DEFAULT_UNIVERSE_SYMBOLS
+
+
+def default_universes() -> List[Dict[str, Any]]:
+    return [{"name": "Core 10", "symbols": list(DEFAULT_UNIVERSE_SYMBOLS)}]
 
 
 @dataclass
 class RuntimeSettings:
-    settings_revision: int = 4
+    settings_revision: int = 5
     starting_capital_usdt: float = 200.0
-    top_n: int = 1000
-    hourly_history_bars: int = 1000
+    risk_per_trade_pct: float = 1.0
+    entry_period: int = 55
+    exit_period: int = 20
+    atr_period: int = 20
+    atr_multiplier: float = 2.0
+    daily_history_bars: int = 120
+    entry_grace_minutes: int = 15
     scan_workers: int = 100
-    app_minimum_surge: float = 1.5
-    indicator_volume_lookback: int = 168
-    indicator_minimum_surge: float = 1.5
-    minimum_close_position: float = 0.75
-    swing_length: int = 50
-    minimum_reward_risk: float = 1.0
-    maximum_reward_risk: float = 4.0  # retained on disk only; never an active gate
-    supertrend_period: int = 10
-    supertrend_multiplier: float = 3.0
-    supertrend_wilder: bool = True
+    universes: List[Dict[str, Any]] = field(default_factory=default_universes)
+    active_universe: str = "Core 10"
     telegram_enabled: bool = False
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
@@ -36,9 +39,14 @@ class RuntimeSettings:
         data.pop("settings_revision", None)
         data["telegram_bot_token"] = ""
         data["telegram_token_configured"] = bool(self.telegram_bot_token)
-        data.pop("maximum_reward_risk", None)
-        data.update(strategy_version="app_nr7_st_r2_box_weekday_stop256_v2", excluded_entry_days_utc=["Sunday", "Monday"], maximum_stop_distance_pct_exclusive=2.56)
-        data["schedule"] = "Hourly at HH:00 UTC"
+        active = next(
+            (u for u in self.universes if u["name"].lower() == self.active_universe.lower()),
+            None,
+        )
+        data["active_universe_symbols"] = list(active["symbols"]) if active else []
+        data["strategy_version"] = "donchian_55_20_v1"
+        data["schedule"] = "Daily at 00:00 UTC"
+        data["sizing_rule"] = "risk % of equity / (2 x ATR)"
         return data
 
 
@@ -55,15 +63,22 @@ class SettingsStore:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             previous_revision = int(raw.get("settings_revision", 1))
+            if previous_revision < 5:
+                # Pre-Donchian files predate the documented capital range; clamp
+                # instead of refusing to boot, then rewrite at revision 5.
+                try:
+                    capital = float(raw.get("starting_capital_usdt", 200.0))
+                    if math.isfinite(capital):
+                        raw["starting_capital_usdt"] = min(max(capital, 10.0), 1_000_000.0)
+                except (TypeError, ValueError):
+                    pass
             self._value = self._validated(raw, self._value)
             if previous_revision < 2 and self._value.scan_workers == 8:
                 self._value.scan_workers = 50
-            if previous_revision < 3 and self._value.scan_workers == 50:
+            if previous_revision < 3 and self._value.scan_workers in (8, 50):
                 self._value.scan_workers = 100
-            if previous_revision < 4:
-                self._value.minimum_reward_risk = 1.0
-            self._value.settings_revision = 4
-            if previous_revision < 4:
+            self._value.settings_revision = 5
+            if previous_revision < 5:
                 self._write(self._value)
         except Exception as exc:
             raise RuntimeError(f"settings file is unreadable: {self.path}: {exc}") from exc
@@ -77,32 +92,57 @@ class SettingsStore:
             raise ValueError(f"{key} must be between {minimum:g} and {maximum:g}")
         return value
 
+    @staticmethod
+    def _validated_universes(raw_universes: Any) -> List[Dict[str, Any]]:
+        if not isinstance(raw_universes, list) or not raw_universes:
+            raise ValueError("universes must be a non-empty list")
+        seen = set()
+        cleaned: List[Dict[str, Any]] = []
+        for item in raw_universes:
+            if not isinstance(item, dict):
+                raise ValueError("each universe must be an object with name and symbols")
+            name = str(item.get("name", "")).strip()
+            if not name:
+                raise ValueError("each universe needs a name")
+            if name.lower() in seen:
+                raise ValueError(f"duplicate universe name: {name}")
+            seen.add(name.lower())
+            symbols = item.get("symbols")
+            if not isinstance(symbols, list) or not symbols:
+                raise ValueError(f"universe {name} needs a non-empty symbols list")
+            cleaned_symbols: List[str] = []
+            for symbol in symbols:
+                symbol = str(symbol).strip().upper()
+                if not symbol.endswith("USDT"):
+                    raise ValueError(f"universe symbols must end with USDT: {symbol}")
+                if symbol not in cleaned_symbols:
+                    cleaned_symbols.append(symbol)
+            cleaned.append({"name": name, "symbols": cleaned_symbols})
+        return cleaned
+
     def _validated(self, raw: Dict[str, Any], old: RuntimeSettings) -> RuntimeSettings:
         value = RuntimeSettings(**asdict(old))
-        if "starting_capital_usdt" in raw:
-            capital = raw["starting_capital_usdt"]
-            if isinstance(capital, bool):
-                raise ValueError("starting_capital_usdt must be a positive finite amount")
-            capital = float(capital)
-            if not math.isfinite(capital) or capital <= 0:
-                raise ValueError("starting_capital_usdt must be a positive finite amount")
-            value.starting_capital_usdt = capital
-        value.settings_revision = int(raw.get("settings_revision", value.settings_revision))
-        value.top_n = self._number(raw, "top_n", value.top_n, 1, 1000, True)
-        value.hourly_history_bars = self._number(raw, "hourly_history_bars", value.hourly_history_bars, 240, 1000, True)
+        value.starting_capital_usdt = self._number(
+            raw, "starting_capital_usdt", value.starting_capital_usdt, 10, 1_000_000
+        )
+        value.risk_per_trade_pct = self._number(raw, "risk_per_trade_pct", value.risk_per_trade_pct, 0.01, 10)
+        value.entry_period = self._number(raw, "entry_period", value.entry_period, 10, 500, True)
+        value.exit_period = self._number(raw, "exit_period", value.exit_period, 5, 500, True)
+        value.atr_period = self._number(raw, "atr_period", value.atr_period, 2, 200, True)
+        value.atr_multiplier = self._number(raw, "atr_multiplier", value.atr_multiplier, 0.1, 20)
+        value.daily_history_bars = self._number(raw, "daily_history_bars", value.daily_history_bars, 60, 1000, True)
+        value.entry_grace_minutes = self._number(raw, "entry_grace_minutes", value.entry_grace_minutes, 1, 1440, True)
         value.scan_workers = self._number(raw, "scan_workers", value.scan_workers, 1, 100, True)
-        value.app_minimum_surge = self._number(raw, "app_minimum_surge", value.app_minimum_surge, 0.0, 20.0)
-        value.indicator_volume_lookback = self._number(raw, "indicator_volume_lookback", value.indicator_volume_lookback, 1, 500, True)
-        value.indicator_minimum_surge = self._number(raw, "indicator_minimum_surge", value.indicator_minimum_surge, 0.0, 20.0)
-        value.minimum_close_position = self._number(raw, "minimum_close_position", value.minimum_close_position, 0.0, 1.0)
-        value.swing_length = self._number(raw, "swing_length", value.swing_length, 10, 200, True)
-        value.minimum_reward_risk = self._number(raw, "minimum_reward_risk", value.minimum_reward_risk, 0.0, 20.0)
-        value.supertrend_period = self._number(raw, "supertrend_period", value.supertrend_period, 1, 200, True)
-        value.supertrend_multiplier = self._number(raw, "supertrend_multiplier", value.supertrend_multiplier, 0.1, 20.0)
-        if "supertrend_wilder" in raw:
-            if not isinstance(raw["supertrend_wilder"], bool):
-                raise ValueError("supertrend_wilder must be a boolean")
-            value.supertrend_wilder = raw["supertrend_wilder"]
+        if "universes" in raw:
+            value.universes = self._validated_universes(raw["universes"])
+        if "active_universe" in raw:
+            value.active_universe = str(raw["active_universe"]).strip()
+        if not value.active_universe:
+            raise ValueError("active_universe must name one of the configured universes")
+        names = {u["name"].lower() for u in value.universes}
+        if value.active_universe.lower() not in names:
+            known = ", ".join(u["name"] for u in value.universes)
+            raise ValueError(f"active_universe must be one of: {known}")
         if "telegram_enabled" in raw:
             value.telegram_enabled = bool(raw["telegram_enabled"])
         if "telegram_chat_id" in raw:
@@ -137,4 +177,3 @@ class SettingsStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-
