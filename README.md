@@ -22,7 +22,7 @@ Saved settings remain editable. Revision 4 replaces the old inclusive RR interva
 
 ## Risk management
 
-- Demo bankroll cap: **$200 USDT**.
+- Funded demo capital defaults to **$200 USDT** and is editable in the dashboard. Balance = funded capital + recorded realized P&L; equity also includes open P&L.
 - Maximum risk per trade: **$2 USDT**, sized from the actual entry-to-SL distance.
 - Multiple positions and trades per day are allowed when available demo balance can fund them.
 - The $2 risk cap applies separately to each position; combined open risk may exceed $2.
@@ -147,8 +147,16 @@ If `DASHBOARD_PASSWORD` is missing, the service uses `demo-change-me` and displa
 
 ## October 2026 execution and display update
 
-Position quantity = min($2 / (live ask - stop), $100 / live ask), further limited by configured lower caps and available demo cash. The existing $200 total demo bankroll and exchange minimums still apply. The $2 limit is planned price-to-stop risk; fees, gaps and slippage can make realized losses larger. Existing positions keep their quantity and protective exits.
+Position quantity = min($2 / (live ask - stop), $100 / live ask), further limited by configured lower caps and available demo cash. The funded bankroll plus realized P&L, actual free Testnet funds and exchange minimums still apply. The $2 limit is planned price-to-stop risk; fees, gaps and slippage can make realized losses larger. Existing positions keep their quantity and protective exits.
 
 The scan and new-order gate exclude these exact pairs: `BFUSDUSDT`, `EURIUSDT`, `EURUSDT`, `USD1USDT`, `USDEUSDT`, `XUSDUSDT`, `FDUSDUSDT`, `USDCUSDT`, `TUSDUSDT`, `USDPUSDT`, `AEURUSDT`, `RLUSDUSDT`, `UUSDT`. Existing holdings and trade history are retained.
 
 Open cards label **R:R (signal)** using the same saved signal as Passed. Actual fill prices still drive P&L and execution risk; the tooltip shows fill R:R. If the saved signal is unavailable, the card explicitly labels its fallback **R:R (fill)**. Closed records are not rewritten by restart backfill.
+
+## Editable capital and durable history
+
+Use **Capital & scanner settings → Funded capital (USDT) → SAVE SETTINGS**. Any positive finite amount is accepted by the API. Changing this funding base does not reset P&L or alter open positions; for example, 500 capital and +10 Closed P&L gives a 510 balance. It does not deposit funds into Testnet. Available demo cash subtracts open entry cost; order placement also checks actual Testnet free funds. If capital is reduced below current commitments, new entries wait for available funds while exit monitoring continues.
+
+Balance and equity use the existing recorded price-to-price P&L before fees, not a fee-inclusive exchange account statement. Closed trades are retained in SQLite without truncation; the dashboard currently displays the most recent 100 while accounting includes every saved Closed record. A restart does not add the same profit twice.
+
+Mount a persistent Railway volume at `/data` to keep future trades, settings, capital and position state across redeployments. The Railway service refuses **new** entries if this directory is not a mount; existing exit monitoring remains active. Local development continues to use its normal data folder. Storage readiness appears in Engine status. No volume is created by the application itself.

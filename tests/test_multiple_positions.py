@@ -158,3 +158,39 @@ def test_kill_switch_and_existing_daily_loss_stop_still_apply(setup):
     Path(cfg.kill_switch_file).touch()
     assert not allowed_to_trade(state, cfg, logger)
 
+
+@pytest.mark.parametrize('pnl,open_cost,expected', [(10, 200, 9.95), (-10, 180, 9.95),
+                                                  (-210, 0, None)])
+def test_realized_pnl_changes_cash_available_for_next_entry(setup, pnl, open_cost, expected):
+    setup[2]['realized'] = [{'pnl_usdt': pnl}]
+    if open_cost:
+        setup[2]['open_positions']['OLDUSDT'] = {'entry_price': open_cost, 'quantity': 1}
+    exchange = Exchange(free=10000)
+    enter(signal(), exchange, setup)
+    if expected is None:
+        assert exchange.buys == []
+    else:
+        assert exchange.buys[0][1] == pytest.approx(expected)
+
+
+def test_lowering_capital_preserves_existing_position_and_blocks_unfunded_entry(setup):
+    from copy import deepcopy
+    exchange = Exchange()
+    enter(signal(), exchange, setup)
+    original = deepcopy(setup[2]['open_positions'])
+    setup[0].demo_equity_cap_usdt = 50
+    enter(signal('BBBUSDT'), exchange, setup)
+    assert len(exchange.buys) == 1
+    assert setup[2]['open_positions'] == original
+
+
+def test_database_realized_total_is_used_for_cloud_order_budget(setup):
+    setup[2]['open_positions']['OLDUSDT'] = {'entry_price': 200, 'quantity': 1}
+    cfg, market, state, logger = setup
+    exchange = Exchange(free=10000)
+    sig = signal()
+    with patch('demo_trader.time.time', return_value=NOW / 1000):
+        place_signal(sig, market, exchange, {sig.symbol: rule(sig.symbol)}, state,
+                     cfg, logger, realized_pnl_usdt=10)
+    assert exchange.buys[0][1] == pytest.approx(9.95)
+

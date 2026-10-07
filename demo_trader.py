@@ -58,7 +58,7 @@ class BotConfig:
     max_position_notional_pct: float = 100.0
     max_position_notional_usdt: float = MAX_POSITION_NOTIONAL_USDT
     max_entry_drift_pct: float = 0.30
-    demo_equity_cap_usdt: float = 200.0
+    demo_equity_cap_usdt: float = 200.0  # funded capital; balance also includes realized P&L
 
     # API / runtime.
     request_timeout_s: int = 15
@@ -664,6 +664,20 @@ def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
     return True
 
 
+def demo_balance_usdt(cfg: BotConfig, state: dict, realized_pnl_usdt=None) -> float:
+    """Ledger balance, before fees: funded capital plus recorded closed P&L.
+
+    Cloud execution supplies the durable database aggregate. Standalone use
+    falls back to its state ledger. Open P&L does not fund new entries.
+    """
+    if realized_pnl_usdt is None:
+        realized_pnl_usdt = sum(float(r.get("pnl_usdt") or 0) for r in state.get("realized", []))
+    balance = float(cfg.demo_equity_cap_usdt) + float(realized_pnl_usdt)
+    if not math.isfinite(balance):
+        raise ValueError("Demo balance must be finite")
+    return balance
+
+
 def place_signal(
     sig: Signal,
     market: PublicMarketClient,
@@ -674,6 +688,7 @@ def place_signal(
     logger: EventLogger,
     minimum_reward_risk: float = 1.0,
     maximum_reward_risk: float = 4.0,
+    realized_pnl_usdt=None,
 ):
     key = signal_key(sig)
     if sig.symbol.upper() in EXCLUDED_SYMBOLS:
@@ -712,10 +727,11 @@ def place_signal(
         float(p.get("entry_price", 0)) * float(p.get("quantity", 0))
         for p in state.get("open_positions", {}).values()
     )
-    # Keep risk percentages anchored to the configured demo bankroll rather than
-    # shrinking them merely because some USDT is currently deployed in open positions.
-    equity = min(usdt_free + open_notional, cfg.demo_equity_cap_usdt)
-    available_quote = min(usdt_free, max(0.0, cfg.demo_equity_cap_usdt - open_notional))
+    # Realized profits/losses change the funded bankroll. Existing commitments
+    # remain reserved, and orders cannot spend more than actual Testnet cash.
+    balance = demo_balance_usdt(cfg, state, realized_pnl_usdt)
+    equity = min(usdt_free + open_notional, balance)
+    available_quote = min(usdt_free, max(0.0, balance - open_notional))
     if equity <= 0 or available_quote <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no free demo quote balance", signal_key=key)
         return

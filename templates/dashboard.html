@@ -29,7 +29,8 @@
   <div id="errorbar" class="errorbar"></div>
 
   <div class="grid">
-    <div class="stat"><div class="k">Demo equity estimate</div><div id="equity" class="v">—</div><div id="freeUsdt" class="s">Testnet balance</div></div>
+    <div class="stat"><div class="k">Demo balance</div><div id="balance" class="v">—</div><div id="capitalSummary" class="s">Capital + realized P&L</div></div>
+    <div class="stat"><div class="k">Demo equity estimate</div><div id="equity" class="v">—</div><div id="freeUsdt" class="s">Balance + open P&L</div></div>
     <div class="stat"><div class="k">Open P&L</div><div id="openPnl" class="v">—</div><div id="openCount" class="s">0 open</div></div>
     <div class="stat"><div class="k">Realized P&L</div><div id="realizedPnl" class="v">—</div><div id="realizedR" class="s">0R</div></div>
     <div class="stat"><div class="k">Today</div><div id="todayPnl" class="v">—</div><div id="todayR" class="s">0R</div></div>
@@ -64,8 +65,10 @@
   </section>
 
   <section class="section">
-    <div class="section-head"><h2>Scanner settings</h2><div class="meta">Saved values apply to the next scan</div></div>
+    <div class="section-head"><h2>Capital & scanner settings</h2><div class="meta">Capital applies immediately; scanner changes apply to the next scan</div></div>
     <div class="settings-grid">
+      <div class="field"><label for="setCapital">Funded capital (USDT)</label><input id="setCapital" type="number" min="0.01" step="any"></div>
+      <p>Balance = funded capital + recorded Closed P&L. Changing capital keeps trade history and open positions. Orders also require available Testnet funds. Recorded P&L is before fees.</p>
       <div class="field"><label>Top Binance USDT symbols</label><input id="setTopN" type="number" min="1" max="1000"></div>
       <div class="field"><label>1H history bars</label><input id="setHistory" type="number" min="240" max="1000"></div>
       <div class="field"><label>Concurrent workers</label><input id="setWorkers" type="number" min="1" max="100"></div>
@@ -154,6 +157,7 @@
 
   function renderSettings(s){
     if(settingsInitialized)return;settingsInitialized=true;
+    $('setCapital').value=s.starting_capital_usdt;
     $('setTopN').value=s.top_n;$('setHistory').value=s.hourly_history_bars;$('setWorkers').value=s.scan_workers;
     $('setAppSurge').value=s.app_minimum_surge;$('setLookback').value=s.indicator_volume_lookback;
     $('setIndicatorSurge').value=s.indicator_minimum_surge;$('setClosePosition').value=s.minimum_close_position;
@@ -181,7 +185,9 @@
       ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.valid_count} passed · ${d.scan.app_confirmed_count} confirmed · ${d.scan.filtered.length} filtered · ${d.scan.error_count} errors · ${num(d.scan.duration_seconds,2)}s`],
       ['Schedule','Every hour at H:00 UTC'],
       ['Strategy',`App + NR7/Supertrend Pine · R:R > ${num(d.settings.minimum_reward_risk,2)} · no Sun/Mon UTC · stop < 2.56%`],
-      ['Risk',`Max ${num(r.risk_per_trade_usdt,2)} USDT risk/trade · max ${num(r.max_position_notional_usdt,2)} USDT/position · positions limited by available balance · no daily trade-count cap`],['Demo bankroll cap',`${num(r.demo_equity_cap_usdt,2)} USDT`]
+      ['Risk',`Max ${num(r.risk_per_trade_usdt,2)} USDT risk/trade · max ${num(r.max_position_notional_usdt,2)} USDT/position · positions limited by available balance · no daily trade-count cap`],['Funded capital',`${num(r.starting_capital_usdt,2)} USDT`],
+      ['Free Testnet funds',m.testnet_free_usdt==null?'—':`${num(m.testnet_free_usdt,2)} USDT`],
+      ['Trade history storage',m.history_persistent?'Persistent':`<span class="warnc">${esc(m.storage_error || 'Local files; keep the data folder when updating.')}</span>`]
     ];
     $('engineBody').innerHTML=items.map(x=>`<tr><th style="width:180px">${x[0]}</th><td>${x[1]}</td></tr>`).join('');
     $('scanMeta').textContent=m.scan_in_progress?'Scanning market now…':`Last scan: ${date(m.last_scan_completed)}`;
@@ -194,10 +200,12 @@
     const enabled=m.new_entries_enabled && m.execution_ready;
     $('botPill').className='pill '+(enabled?'good':m.execution_ready?'warn':'bad');
     $('botText').textContent=enabled?'RUNNING / NEW TRADES ON':m.execution_ready?'RUNNING / NEW TRADES PAUSED':'TESTNET NOT READY';
-    $('startBtn').disabled=!m.execution_ready || m.new_entries_enabled;
+    $('startBtn').disabled=!m.execution_ready || !!m.storage_error || m.new_entries_enabled;
     $('stopBtn').disabled=!m.new_entries_enabled;
     $('equity').textContent=s.estimated_demo_equity_usdt==null?'—':`${num(s.estimated_demo_equity_usdt,2)} USDT`;
-    $('freeUsdt').textContent=`Free Testnet USDT: ${m.testnet_free_usdt==null?'—':num(m.testnet_free_usdt,2)} · risk cap ${num(r.demo_equity_cap_usdt,0)}`;
+    $('balance').textContent=`${num(s.demo_balance_usdt,2)} USDT`;
+    $('capitalSummary').textContent=`Capital ${num(r.starting_capital_usdt,2)} · available demo cash ${num(s.available_demo_cash_usdt,2)}`;
+    $('freeUsdt').textContent='Demo balance + open P&L · before fees';
     setMoney('openPnl',s.unrealized_pnl_usdt); $('openCount').textContent=`${s.open_count} open positions`;
     setMoney('realizedPnl',s.realized_pnl_usdt); $('realizedR').textContent=`${num(s.realized_r,2)}R total`;
     setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
@@ -205,7 +213,7 @@
     $('openRisk').textContent=money(s.open_risk_usdt); $('riskLimits').textContent=`Max ${num(r.risk_per_trade_usdt,2)} USDT risk per trade`;
     renderOpen(d.open_trades); renderClosed(d.closed_trades); renderPassed(d.passed_signals); renderConfirmed(d.confirmed_signals); renderFiltered(d.filtered_signals); renderEngine(d); renderSettings(d.settings);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
-    if(m.last_scan_error || m.last_position_sync_error) showError(m.last_scan_error || m.last_position_sync_error); else showError('');
+    if(m.storage_error || m.last_scan_error || m.last_position_sync_error) showError(m.storage_error || m.last_scan_error || m.last_position_sync_error); else showError('');
   }
 
   async function refresh(){
@@ -217,9 +225,9 @@
     try{const res=await fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrf}});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);await refresh()}catch(e){showError(e.message)}finally{if(state){$('startBtn').disabled=!state.meta.execution_ready||state.meta.new_entries_enabled;$('stopBtn').disabled=!state.meta.new_entries_enabled}}
   }
   async function saveSettings(){
-    const body={top_n:Number($('setTopN').value),hourly_history_bars:Number($('setHistory').value),scan_workers:Number($('setWorkers').value),app_minimum_surge:Number($('setAppSurge').value),indicator_volume_lookback:Number($('setLookback').value),indicator_minimum_surge:Number($('setIndicatorSurge').value),minimum_close_position:Number($('setClosePosition').value),swing_length:Number($('setSwing').value),minimum_reward_risk:Number($('setMinRr').value),supertrend_period:Number($('setStPeriod').value),supertrend_multiplier:Number($('setStMultiplier').value),supertrend_wilder:$('setStWilder').checked,telegram_enabled:$('setTelegramEnabled').checked,telegram_chat_id:$('setTelegramChat').value,telegram_bot_token:$('setTelegramToken').value};
+    const body={starting_capital_usdt:Number($('setCapital').value),top_n:Number($('setTopN').value),hourly_history_bars:Number($('setHistory').value),scan_workers:Number($('setWorkers').value),app_minimum_surge:Number($('setAppSurge').value),indicator_volume_lookback:Number($('setLookback').value),indicator_minimum_surge:Number($('setIndicatorSurge').value),minimum_close_position:Number($('setClosePosition').value),swing_length:Number($('setSwing').value),minimum_reward_risk:Number($('setMinRr').value),supertrend_period:Number($('setStPeriod').value),supertrend_multiplier:Number($('setStMultiplier').value),supertrend_wilder:$('setStWilder').checked,telegram_enabled:$('setTelegramEnabled').checked,telegram_chat_id:$('setTelegramChat').value,telegram_bot_token:$('setTelegramToken').value};
     $('saveSettingsBtn').disabled=true;$('settingsSaved').textContent='Saving…';
-    try{const res=await fetch('/api/config',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(body)});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);$('setTelegramToken').value='';$('settingsSaved').textContent='Saved. Applies on the next scan.';settingsInitialized=false;await refresh()}catch(e){showError(e.message);$('settingsSaved').textContent='Not saved.'}finally{$('saveSettingsBtn').disabled=false}
+    try{const res=await fetch('/api/config',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(body)});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);$('setTelegramToken').value='';$('settingsSaved').textContent='Saved. Capital updated; scanner changes apply on the next scan.';settingsInitialized=false;await refresh()}catch(e){showError(e.message);$('settingsSaved').textContent='Not saved.'}finally{$('saveSettingsBtn').disabled=false}
   }
   $('startBtn').addEventListener('click',()=>action('/api/start'));
   $('stopBtn').addEventListener('click',()=>action('/api/stop'));

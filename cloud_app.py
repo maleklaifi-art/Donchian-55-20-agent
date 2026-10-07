@@ -23,6 +23,7 @@ from demo_trader import (
     PublicMarketClient,
     StrategyConfig,
     TestnetExecutionClient,
+    demo_balance_usdt,
     load_config,
     load_rules,
     load_state,
@@ -81,9 +82,17 @@ class CloudDemoEngine:
         self.cfg = cfg
         self.db = db
         self.settings_store = settings_store
+        self.cfg.demo_equity_cap_usdt = settings_store.get().starting_capital_usdt
         self.logger = DashboardLogger(cfg.event_log, db)
         self.market = PublicMarketClient(cfg.request_timeout_s)
         self.state_lock = threading.RLock()
+        # Railway's ordinary container filesystem is replaced on redeploy.
+        # A real mount is required before collecting new trade history there.
+        self.history_persistent = os.path.ismount(Path(cfg.state_file).resolve().parent)
+        self.storage_error = (
+            "Persistent trade storage is not mounted. Attach a volume at DATA_DIR before enabling new entries."
+            if os.getenv("RAILWAY_ENVIRONMENT_ID") and not self.history_persistent else None
+        )
         self.meta_lock = threading.RLock()
         self.stop_event = threading.Event()
         self.scan_wakeup = threading.Event()
@@ -155,6 +164,8 @@ class CloudDemoEngine:
         kill = Path(self.cfg.kill_switch_file)
         kill.parent.mkdir(parents=True, exist_ok=True)
         if enabled:
+            if self.storage_error:
+                raise ValueError(self.storage_error)
             if kill.exists():
                 kill.unlink()
             self.logger.emit("DASHBOARD_START_NEW_ENTRIES")
@@ -164,7 +175,7 @@ class CloudDemoEngine:
             self.logger.emit("DASHBOARD_STOP_NEW_ENTRIES")
 
     def new_entries_enabled(self) -> bool:
-        return not Path(self.cfg.kill_switch_file).exists()
+        return not self.storage_error and not Path(self.cfg.kill_switch_file).exists()
 
     def _scanner_loop(self):
         while not self.stop_event.is_set():
@@ -194,7 +205,11 @@ class CloudDemoEngine:
         )
 
     def update_settings(self, raw: dict):
-        value = self.settings_store.update(raw)
+        # Serialize funding changes with order submission and exit accounting.
+        # Changing capital is a funding adjustment, never a reset of trade P&L.
+        with self.state_lock:
+            value = self.settings_store.update(raw)
+            self.cfg.demo_equity_cap_usdt = value.starting_capital_usdt
         self.logger.emit("SETTINGS_UPDATED", settings=value.public_dict())
         return value
 
@@ -214,15 +229,20 @@ class CloudDemoEngine:
 
         def on_signal(sig):
             sk = f"{sig.symbol}:{sig.signal_close_ms}"
+            if self.storage_error:
+                self.logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=sk, reason=self.storage_error)
+                return
             if not self.execution_ready or self.exec_client is None:
                 self.logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=sk, reason="testnet execution unavailable")
                 return
             with self.state_lock:
                 state = load_state(self.cfg.state_file)
+                self.db.backfill_state(state)
                 place_signal(
                     sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger,
                     strategy_config.minimum_reward_risk,
                     strategy_config.maximum_reward_risk,
+                    realized_pnl_usdt=self.db.stats()["realized_pnl_usdt"],
                 )
 
         try:
@@ -320,11 +340,16 @@ class CloudDemoEngine:
             self.last_price_refresh = utc_now()
 
     def snapshot(self):
+        with self.state_lock:
+            return self._snapshot_locked()
+
+    def _snapshot_locked(self):
         stats = self.db.stats()
         open_trades = self.db.open_trades()
         unrealized = 0.0
         open_risk = 0.0
         open_value = 0.0
+        open_cost = 0.0
         for t in open_trades:
             px = self.live_prices.get(t["symbol"]) or t.get("current_price") or t.get("entry_price") or 0.0
             entry = float(t.get("entry_price") or 0)
@@ -337,11 +362,16 @@ class CloudDemoEngine:
             unrealized += t["unrealized_pnl_usdt"]
             open_risk += float(t.get("risk_usdt") or 0)
             open_value += px * qty
+            open_cost += entry * qty
         stats["unrealized_pnl_usdt"] = unrealized
         stats["total_pnl_usdt"] = stats["realized_pnl_usdt"] + unrealized
         stats["open_risk_usdt"] = open_risk
         raw_equity = (self.testnet_free_usdt or 0.0) + open_value if self.testnet_free_usdt is not None else None
-        stats["estimated_demo_equity_usdt"] = min(raw_equity, self.cfg.demo_equity_cap_usdt) if raw_equity is not None else None
+        balance = demo_balance_usdt(self.cfg, {}, stats["realized_pnl_usdt"])
+        stats["demo_balance_usdt"] = balance
+        stats["estimated_demo_equity_usdt"] = balance + unrealized
+        stats["available_demo_cash_usdt"] = max(0.0, balance - open_cost)
+        stats["estimated_testnet_equity_usdt"] = raw_equity
 
         with self.meta_lock:
             meta = {
@@ -359,6 +389,8 @@ class CloudDemoEngine:
                 "last_position_sync_error": self.last_position_sync_error,
                 "last_price_refresh": self.last_price_refresh,
                 "testnet_free_usdt": self.testnet_free_usdt,
+                "history_persistent": self.history_persistent,
+                "storage_error": self.storage_error,
                 "next_scan_at_ms": self.next_scan_at_ms,
             }
         return {
@@ -372,6 +404,7 @@ class CloudDemoEngine:
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "max_entry_drift_pct": self.cfg.max_entry_drift_pct,
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
+                "starting_capital_usdt": self.cfg.demo_equity_cap_usdt,
             },
             "stats": stats,
             "open_trades": open_trades,
@@ -400,7 +433,7 @@ cfg.signal_log = str(DATA_DIR / "signals.json")
 cfg.kill_switch_file = str(DATA_DIR / "STOP_TRADING")
 
 db = TradeDatabase(str(DATA_DIR / "trades.sqlite3"))
-settings_store = SettingsStore(str(DATA_DIR / "settings.json"))
+settings_store = SettingsStore(str(DATA_DIR / "settings.json"), cfg.demo_equity_cap_usdt)
 engine = CloudDemoEngine(cfg, db, settings_store)
 if not as_bool(os.getenv("AUTO_START_NEW_TRADES"), True):
     Path(cfg.kill_switch_file).write_text("Safe startup: new entries paused. Use dashboard START.\n", encoding="utf-8")
@@ -550,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
         if not csrf or not secrets.compare_digest(csrf, sess["csrf"]):
             return self._json(403, {"error": "invalid csrf token"})
         if path == "/api/start":
+            if engine.storage_error:
+                return self._json(409, {"ok": False, "error": engine.storage_error})
             if not engine.execution_ready:
                 return self._json(409, {"ok": False, "error": engine.last_execution_error or "Testnet execution is not ready"})
             engine.set_new_entries_enabled(True)

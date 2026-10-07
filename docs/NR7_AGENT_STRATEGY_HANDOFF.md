@@ -85,7 +85,7 @@ Boundary examples: RR=1 fails; RR=4 and RR=10 may pass. Entry 100/stop 97.44 is 
 
 ## 6. Capital and operational controls
 
-Use the agreed $200 demo bankroll cap, $100 maximum position notional, and $2 maximum planned price-to-stop risk per trade. Keep one open position per symbol; allow multiple symbols while available demo balance permits. Do not add a one-position-global or one-trade-per-day rule.
+Use editable funded capital (default $200) plus recorded realized P&L, $100 maximum position notional, and $2 maximum planned price-to-stop risk per trade. Keep one open position per symbol; allow multiple symbols while available demo balance permits. Do not add a one-position-global or one-trade-per-day rule.
 
 The execution code sizes using the live ask and minimum of risk sizing, $100 notional cap, the existing percentage cap, and available quote balance with its existing 0.5% buffer. It floors protective quantity to the exchange lot step and rounds TP/SL to the nearest exchange tick. It subtracts entry base-asset commission from the quantity available to protect. It rechecks the strict Pine R:R lower bound and absolute planned risk after the Testnet fill; invalid exposure is emergency-flattened by the existing safety path.
 
@@ -391,3 +391,7 @@ if enterLong
     alert("Confirmed NR7 + Supertrend BUY | " + syminfo.ticker + " | Signal close: " + str.tostring(close, format.mintick) + " | Fixed R2: " + str.tostring(activeTP, format.mintick) + " | Fixed SL: " + str.tostring(activeSL, format.mintick), alert.freq_once_per_bar_close)
 
 ```
+
+### Capital update (2026-10-07)
+
+Runtime `starting_capital_usdt` overrides the legacy config field `demo_equity_cap_usdt`, which now represents the funding base, not an equity ceiling. Dashboard balance is funding base plus the SQLite Closed P&L aggregate. Equity adds unrealized P&L. Cloud orders use that same durable Closed aggregate and subtract open entry commitments; actual Testnet cash and the unchanged $100/$2 per-order limits still apply. Existing P&L excludes commissions; do not describe it as net after fees. Settings persist atomically; startup reloads capital without resetting strategy preferences or trade history. Railway new entries require a mounted data directory.

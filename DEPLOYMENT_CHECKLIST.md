@@ -16,7 +16,7 @@ Use this once when deploying the demo agent.
 - [ ] Deploy and open the public HTTPS dashboard URL.
 - [ ] Confirm **Execution: READY**.
 - [ ] Confirm **New entries: ENABLED** after startup when `AUTO_START_NEW_TRADES=true`.
-- [ ] Review risk settings: $200 bankroll cap, $100 maximum position notional, $2 maximum planned risk per trade, multiple positions funded by available balance.
+- [ ] Review risk settings: editable funded capital (default $200), with realized P&L added to balance, $100 maximum position notional, $2 maximum planned risk per trade, multiple positions funded by available balance.
 - [ ] Confirm the dashboard reports Testnet **READY**; use **STOP NEW TRADES** whenever you want to pause entries.
 - [ ] Leave it on demo until the forward-test sample is large enough to evaluate.
 
@@ -36,3 +36,11 @@ Do not deploy or attach a new volume to a running service that only has ephemera
 5. Confirm effective $100/$2 limits, signal R:R and symbol exclusions, then resume new entries.
 
 This code change has no data-file deletion or schema replacement. It cannot preserve files that the hosting platform discards during deployment.
+
+## Updated owner instruction — 2026-10-07
+
+The owner no longer requires a backup of old Closed history. That backup is not an approval condition for this release. New Closed trades and capital/settings must persist from the new deployment onward.
+
+Before cutover, obtain approval for Railway's billed persistent volume and attach it at `/data`. Preserve any still-open position state, exit-watch cursors, deduplication records and current settings, or wait until the account is flat and explicitly review the settings for the fresh deployment. Dropping old Closed history does not authorize abandoning open-position management. Do not blindly merge while storage is ephemeral.
+
+After deployment verify storage is persistent, set the desired funded capital, and confirm 500 capital plus +10 recorded P&L displays 510 balance (do not insert fake trades into production for this check). Existing $100 order and $2 planned risk caps remain absolute. Verify real closed records and settings survive the next planned restart; do not create test orders solely to validate persistence.
