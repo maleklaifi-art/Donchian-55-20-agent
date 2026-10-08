@@ -44,12 +44,8 @@ def as_bool(value: Optional[str], default: bool = False) -> bool:
 
 
 def next_day_boundary(now_seconds: float) -> int:
-    """Next 00:00 UTC boundary plus a settle delay, as an epoch second.
-
-    The delay lets Binance finalize the just-closed daily candle before the
-    Donchian evaluation reads it.
-    """
-    return (int(now_seconds // 86_400) + 1) * 86_400 + 10
+    """Next exact 00:00 UTC boundary, without an unconditional settle delay."""
+    return (int(now_seconds // 86_400) + 1) * 86_400
 
 
 class DashboardLogger(EventLogger):
@@ -186,7 +182,7 @@ class CloudDemoEngine:
             with self.meta_lock:
                 self.next_scan_at_ms = int(next_day * 1000)
             self.scan_wakeup.clear()
-            self.scan_wakeup.wait(timeout=max(15.0, next_day - now))
+            self.scan_wakeup.wait(timeout=max(0.0, next_day - now))
 
     def _apply_settings(self, settings: RuntimeSettings) -> DonchianConfig:
         active = next(

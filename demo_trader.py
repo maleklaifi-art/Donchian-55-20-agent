@@ -471,8 +471,18 @@ def scan_market_detailed(
     started = time.monotonic()
 
     def one(sym: str):
-        daily = market.klines(sym, "1d", scfg.daily_history_bars)
-        return evaluate_donchian(sym, daily, scfg, now_ms, holding=sym in holding, universe=cfg.universe_name)
+        # Start immediately at midnight. Retry only if the exchange still
+        # returns yesterday's data; never evaluate an unfinished candle.
+        for attempt in range(3):
+            daily = market.klines(sym, "1d", scfg.daily_history_bars)
+            evaluation = evaluate_donchian(
+                sym, daily, scfg, now_ms, holding=sym in holding, universe=cfg.universe_name,
+            )
+            stale = (evaluation.rejection_stage == "Data"
+                     and (evaluation.rejection_reason or "").startswith("Stale daily candles:"))
+            if not (stale and within_entry_grace(now_ms, scfg.entry_grace_minutes) and attempt < 2):
+                return evaluation
+            time.sleep(1.0)
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.scan_workers)) as pool:
         futs = {pool.submit(one, s): s for s in symbols}
@@ -918,8 +928,8 @@ def run_once(cfg: BotConfig, execute_demo: bool):
 
 def sleep_to_next_day():
     now = time.time()
-    next_day = (math.floor(now / 86_400) + 1) * 86_400 + 10
-    time.sleep(max(30, next_day - now))
+    next_day = (math.floor(now / 86_400) + 1) * 86_400
+    time.sleep(max(0.0, next_day - now))
 
 
 def main():

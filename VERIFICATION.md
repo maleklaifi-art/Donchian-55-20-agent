@@ -28,7 +28,7 @@ Covered behavior:
 - Settings API: capital, risk %, entry/exit periods, ATR period/multiplier, history length, grace, scan workers round trip; invalid values rejected with 400; legacy NR7 knobs cannot be reinstated.
 - Named universes round trip (create/activate/unknown-active rejected) and are applied to the engine's scan config.
 - Capital change preserves strategy settings and Closed/open rows; 500 capital + 10 P&L = 510 balance; restart does not double-count; negative close replayed once; invalid capitals (0, negative, boolean, NaN, Infinity) rejected.
-- Daily scheduler targets `00:00 UTC + 10s` settle delay.
+- Daily scheduler targets exact `00:00 UTC` with no fixed settle delay or minimum wait that overshoots midnight. Missing latest daily data receives at most two one-second retries near the boundary; stale/incomplete data remains rejected.
 - Railway entries blocked without a mounted `/data` volume; exit readiness independent of it.
 - Dashboard DOM-ID invariant: every `$('id')` reference exists in the markup; NR7/Supertrend wording absent; open/closed/entry/exit/no-action rendering, settings inputs, universe controls, balance/equity and before-fee labelling.
 

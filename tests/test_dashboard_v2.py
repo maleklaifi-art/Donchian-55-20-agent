@@ -129,10 +129,10 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
         open_trade = restarted.snapshot()['open_trades']
         assert open_trade == []  # OPEN:1 was just closed
 
-        # The daily scheduler targets 00:00 UTC + settle delay.
+        # The daily scheduler targets exactly 00:00 UTC without a settle delay.
         day = int(datetime(2026, 10, 7, tzinfo=timezone.utc).timestamp())
-        assert app.next_day_boundary(day + 30) == day + 86400 + 10
-        assert app.next_day_boundary(day + 86_300) == day + 86400 + 10
+        assert app.next_day_boundary(day + 30) == day + 86400
+        assert app.next_day_boundary(day + 86_300) == day + 86400
 
         # Railway refuses new entries without durable storage; exit readiness
         # is independent and remains available for positions already tracked.

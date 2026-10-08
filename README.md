@@ -86,6 +86,8 @@ After the one-time deployment:
 3. Confirm that Testnet execution says **READY**. New demo entries start automatically when `AUTO_START_NEW_TRADES=true`.
 4. Close the browser if you want. The cloud agent scans on startup and again at every exact `00:00 UTC` boundary, and can execute qualifying demo trades within the grace window when available balance allows.
 
+There is no fixed 10-second delay. Both cloud and command-line loops target the daily boundary. Scanning, optional notifications and order checks still take time before a fill. If the latest completed daily candle is missing, its fetch is retried at most twice, one second apart, within the entry window; stale candles are never traded.
+
 ## Dashboard terms
 
 - **Data** — symbol excluded because the daily candles are stale, short, gapped or inconsistent.
