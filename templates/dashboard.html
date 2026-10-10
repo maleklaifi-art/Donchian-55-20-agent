@@ -146,15 +146,15 @@ button,input,select{font:inherit}
       <div class="field"><label for="setWorkers">Concurrent workers</label><input id="setWorkers" type="number" min="1" max="100"></div>
       <p>Sizing: qty = (risk % × equity) / (2 × ATR). Long-only spot, one position per symbol, no stop orders — positions close only when the daily close breaks the 20-day low. Daily loss limit −3R. Orders need available Testnet funds; recorded P&amp;L is before fees.</p>
 
-      <div class="field"><label for="setUniverseSelect">Saved universes</label><select id="setUniverseSelect"></select></div>
+      <div class="field"><label for="setUniverseSelect">List to edit</label><select id="setUniverseSelect"></select></div>
       <div class="field"><label for="setUniverseName">Universe name</label><input id="setUniverseName" type="text" placeholder="Core 10"></div>
       <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Symbols (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
       <div class="universe-actions">
         <button id="setUniverseNew" class="btn secondary small" type="button">NEW UNIVERSE</button>
-        <button id="setUniverseSave" class="btn secondary small" type="button">SAVE UNIVERSE</button>
+        <button id="setUniverseSave" class="btn secondary small" type="button">APPLY LIST EDITS</button>
         <button id="setUniverseActivate" class="btn start small" type="button">ACTIVATE UNIVERSE</button>
         <button id="setUniverseDelete" class="btn stop small" type="button">DELETE UNIVERSE</button>
-        <span id="universeNote" class="note">Universe edits are staged locally until you press SAVE SETTINGS.</span>
+        <span id="universeNote" class="note">Edit this list’s name or coins, then SAVE SETTINGS. Held coins remain monitored for exits if removed.</span>
       </div>
 
       <div class="field check"><input id="setTelegramEnabled" type="checkbox"><label for="setTelegramEnabled">Telegram alerts enabled</label></div>
@@ -173,6 +173,7 @@ button,input,select{font:inherit}
   let settingsInitialized = false;
   let universeDraft = [];
   let activeUniverseName = '';
+  let editingUniverseName = null;
   const $ = id => document.getElementById(id);
   const money = v => v == null ? '—' : `${Number(v)>=0?'+':''}${Number(v).toFixed(2)} USDT`;
   const num = (v,d=4) => v == null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
@@ -282,6 +283,7 @@ button,input,select{font:inherit}
   function loadUniverseInputs(name){
     const u=universeDraft.find(x=>x.name.toLowerCase()===String(name||'').toLowerCase());
     if(!u)return;
+    editingUniverseName=u.name;
     $('setUniverseName').value=u.name;
     $('setUniverseSymbols').value=u.symbols.join(', ');
   }
@@ -292,12 +294,19 @@ button,input,select{font:inherit}
     if(!symbols.length) throw new Error('Universe needs at least one symbol');
     const bad=symbols.find(x=>!x.endsWith('USDT'));
     if(bad) throw new Error(`Universe symbols must be USDT pairs: ${bad}`);
-    return {name, symbols};
+    return {name, symbols:[...new Set(symbols)]};
   }
   function upsertUniverse(){
     const rec=readUniverseInputs();
-    const i=universeDraft.findIndex(u=>u.name.toLowerCase()===rec.name.toLowerCase());
-    if(i>=0) universeDraft[i]=rec; else universeDraft.push(rec);
+    const i=editingUniverseName===null ? -1 : universeDraft.findIndex(u=>u.name.toLowerCase()===editingUniverseName.toLowerCase());
+    const collision=universeDraft.findIndex(u=>u.name.toLowerCase()===rec.name.toLowerCase());
+    if(collision>=0 && collision!==i) throw new Error('Another list already uses this name. Choose a different name.');
+    if(editingUniverseName!==null && i<0) throw new Error('Selected list no longer exists. Select it again.');
+    if(i>=0){
+      const wasActive=universeDraft[i].name.toLowerCase()===activeUniverseName.toLowerCase();
+      universeDraft[i]=rec;
+      if(wasActive) activeUniverseName=rec.name;
+    }else universeDraft.push(rec);
     refreshUniverseSelect(rec.name);
     return rec;
   }
@@ -372,7 +381,9 @@ button,input,select{font:inherit}
     };
   }
   async function saveSettings(){
-    const body=settingsPayload();
+    let body;
+    try{upsertUniverse();body=settingsPayload();}
+    catch(e){showError(e.message);note('Not saved.');return;}
     $('saveSettingsBtn').disabled=true;note('Saving…');
     try{const res=await fetch('/api/config',{method:'POST',headers:{'X-CSRF-Token':csrf,'Content-Type':'application/json'},body:JSON.stringify(body)});const out=await res.json();if(!res.ok||!out.ok)throw new Error(out.error||`HTTP ${res.status}`);$('setTelegramToken').value='';note('Saved. Capital applies now; strategy and universe changes apply to the next daily scan.');settingsInitialized=false;await refresh()}catch(e){showError(e.message);note('Not saved.')}finally{$('saveSettingsBtn').disabled=false}
   }
@@ -381,7 +392,7 @@ button,input,select{font:inherit}
   $('stopBtn').addEventListener('click',()=>action('/api/stop'));
   $('saveSettingsBtn').addEventListener('click',saveSettings);
   $('setUniverseSelect').addEventListener('change',e=>loadUniverseInputs(e.target.value));
-  $('setUniverseNew').addEventListener('click',()=>{$('setUniverseName').value='';$('setUniverseSymbols').value='';$('setUniverseName').focus();note('New universe: fill the fields, then SAVE UNIVERSE.');});
+  $('setUniverseNew').addEventListener('click',()=>{editingUniverseName=null;$('setUniverseSelect').value='';$('setUniverseName').value='';$('setUniverseSymbols').value='';$('setUniverseName').focus();note('New universe: fill the fields, then SAVE SETTINGS.');});
   $('setUniverseSave').addEventListener('click',()=>{try{const rec=upsertUniverse();note(`Universe "${rec.name}" staged locally. PRESS SAVE SETTINGS to apply.`);}catch(e){showError(e.message)}});
   $('setUniverseActivate').addEventListener('click',()=>{try{const rec=upsertUniverse();activeUniverseName=rec.name;note(`Active universe will be "${rec.name}". PRESS SAVE SETTINGS to apply.`);}catch(e){showError(e.message)}});
   $('setUniverseDelete').addEventListener('click',()=>{

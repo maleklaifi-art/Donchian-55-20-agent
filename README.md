@@ -142,3 +142,13 @@ Use **Capital & strategy settings → Funded capital (USDT) → SAVE SETTINGS**.
 Balance and equity use the existing recorded price-to-price P&L before fees, not a fee-inclusive exchange account statement. Closed trades are retained in SQLite without truncation; the dashboard currently displays the most recent 100 while accounting includes every saved Closed record. A restart does not add the same profit twice.
 
 Mount a persistent Railway volume at `/data` to keep future trades, settings, capital and position state across redeployments. The Railway service refuses **new** entries if this directory is not a mount; existing exit monitoring remains active. Local development continues to use its normal data folder. Storage readiness appears in Engine status. No volume is created by the application itself.
+
+
+### Edit the current universe
+
+In **Capital, strategy & universe settings**, select the existing **List to edit**.
+Change its name or add/remove full USDT pairs in **Symbols**, then click **SAVE SETTINGS**.
+You do not need to create a new universe or click APPLY LIST EDITS first.
+Renaming preserves the list and its active status; duplicate names are rejected.
+Changes apply on the next scan. Removing a held coin prevents future entries in that
+coin but keeps daily exit checks until its position closes; it does not sell immediately.

@@ -195,3 +195,19 @@ def test_stale_entry_blocked_before_state_write_or_exchange_call(tmp_path):
     assert not (tmp_path / "state.json").exists()
     assert not client.mock_calls and not market.mock_calls
     assert logger.emit.call_args.kwargs["reason"] == "stale signal candle"
+
+
+def test_removed_held_coins_still_receive_exit_checks(tmp_path):
+    market = FakeMarket(universe_data())
+    cfg = BotConfig(scan_workers=1, universe_symbols=["FLATUSDT"],
+                    signal_log=str(tmp_path / "signals.json"))
+    with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
+        snapshot = scan_market_detailed(market, cfg, DonchianConfig(), Mock(),
+                                        open_symbols={"EXITMEUSDT", "BREAKOUTUSDT"})
+    assert {s for s, _, _ in market.kline_calls} == {"FLATUSDT", "EXITMEUSDT", "BREAKOUTUSDT"}
+    assert [s["symbol"] for s in snapshot["exit_signals"]] == ["EXITMEUSDT"]
+    assert snapshot["signals"] == []  # held breakout cannot become a fresh entry
+    market.kline_calls.clear()
+    with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
+        scan_market_detailed(market, cfg, DonchianConfig(), Mock(), open_symbols=set())
+    assert [s for s, _, _ in market.kline_calls] == ["FLATUSDT"]

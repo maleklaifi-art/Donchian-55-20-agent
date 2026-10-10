@@ -36,8 +36,8 @@ vm.createContext(context);
 vm.runInContext(source.slice(0, source.indexOf("  $('startBtn').addEventListener")) +
   '\n globalThis.renderOpen = renderOpen; globalThis.renderClosed = renderClosed;' +
   ' globalThis.renderEntrySignals = renderEntrySignals; globalThis.renderExitSignals = renderExitSignals;' +
-  ' globalThis.renderNoAction = renderNoAction; globalThis.renderSettings = renderSettings;' +
-  ' globalThis.render = render;\n})();', context);
+  ' globalThis.renderNoAction = renderNoAction; globalThis.renderSettings = (s)=>{settingsInitialized=false;renderSettings(s);};' +
+  ' globalThis.render = render; globalThis.upsertUniverse = upsertUniverse; globalThis.settingsPayload = settingsPayload; globalThis.saveSettings = saveSettings; globalThis.loadUniverseInputs = loadUniverseInputs;\n})();', context);
 
 const openRow = {symbol: 'BTCUSDT', signal_key: 'BTCUSDT:1', entry_price: 60000, current_price: 61000,
   entry_channel: 59000, exit_channel: 55000, distance_to_exit_pct: 10.9, atr: 900,
@@ -103,3 +103,47 @@ assert.match(elements.get('strategyRule').textContent, /55\/20 Donchian · ATR\(
 assert.match(elements.get('capitalSummary').textContent, /available demo cash 460/);
 assert.match(elements.get('freeUsdt').textContent, /before fees/);
 console.log('Donchian dashboard render, settings, universe and balance checks passed.');
+
+// Edit the active list in place, including renaming, without a second record.
+elements.get('setUniverseName').value = 'My coins';
+elements.get('setUniverseSymbols').value = 'BTCUSDT, SOLUSDT, SOLUSDT';
+context.upsertUniverse();
+let payload = JSON.parse(JSON.stringify(context.settingsPayload()));
+assert.equal(payload.universes.length, 1);
+assert.equal(payload.active_universe, 'My coins');
+assert.deepEqual(payload.universes[0], {name:'My coins', symbols:['BTCUSDT','SOLUSDT']});
+// Case-only renaming also preserves the selected record.
+elements.get('setUniverseName').value = 'MY COINS';
+context.upsertUniverse();
+assert.equal(context.settingsPayload().active_universe, 'MY COINS');
+// Renaming into another saved name must not overwrite that list.
+context.renderSettings({...settings, universes:[...settings.universes, {name:'Other', symbols:['LTCUSDT']}]});
+elements.get('setUniverseName').value = 'Other';
+assert.throws(()=>context.upsertUniverse(), /already uses this name/);
+assert.equal(context.settingsPayload().universes.length, 2);
+assert.equal(context.settingsPayload().active_universe, 'Core 10');
+// Editing an inactive list must not activate it.
+context.loadUniverseInputs('Other');
+elements.get('setUniverseName').value = 'Other renamed';
+context.upsertUniverse();
+assert.equal(context.settingsPayload().active_universe, 'Core 10');
+// SAVE SETTINGS must capture typed edits without APPLY LIST EDITS first.
+context.renderSettings(settings);
+elements.get('setUniverseName').value = 'Direct edit';
+elements.get('setUniverseSymbols').value = 'ETHUSDT,LINKUSDT';
+const posted=[];
+context.fetch = async (url, options) => {
+  if(url==='/api/config'){
+    posted.push(JSON.parse(options.body));
+    return {ok:true, json:async()=>({ok:true})};
+  }
+  return {ok:false, status:503}; // No live dashboard refresh in this offline test.
+};
+(async()=>{
+  await context.saveSettings();
+  assert.equal(posted.length,1);
+  assert.equal(posted[0].universes.length,1);
+  assert.equal(posted[0].active_universe,'Direct edit');
+  assert.deepEqual(posted[0].universes[0].symbols,['ETHUSDT','LINKUSDT']);
+  console.log('Universe add/remove, rename, collision and direct-save checks passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

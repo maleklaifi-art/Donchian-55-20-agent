@@ -461,9 +461,12 @@ def scan_market_detailed(
     logger: EventLogger,
     open_symbols: Optional[set] = None,
 ) -> dict:
-    symbols = market.resolve_universe(cfg.universe_symbols, cfg.quote_asset)
-    now_ms = int(time.time() * 1000)
     holding = set(open_symbols or ())
+    # Removing a coin from the entry list must not abandon an existing position.
+    # Held coins are evaluated for exits only, until they have been closed.
+    requested = list(dict.fromkeys([*cfg.universe_symbols, *sorted(holding)]))
+    symbols = market.resolve_universe(requested, cfg.quote_asset)
+    now_ms = int(time.time() * 1000)
     entries: List[Signal] = []
     exits: List[Signal] = []
     filtered = []
