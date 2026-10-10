@@ -61,7 +61,8 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
         assert code == 200
         assert 'Donchian 55/20 Demo Agent' in html
         assert 'NR7' not in html and 'Supertrend' not in html
-        assert 'id="setRiskPct"' in html and 'id="setUniverseActivate"' in html
+        assert 'id="setRiskPct"' in html and 'id="setUniverseName"' in html
+        assert 'id="setUniverseSelect"' not in html and 'id="setUniverseActivate"' not in html
         assert 'Daily at 00:00 UTC' in html
         ids = set(re.findall(r'id="([^"]+)"', html))
         refs = set(re.findall(r"\$\('([^']+)'\)", html))

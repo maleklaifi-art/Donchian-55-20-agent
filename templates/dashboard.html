@@ -72,8 +72,7 @@ button,input,select{font:inherit}
 .check input{width:auto}
 .settings-actions{padding:0 14px 14px;display:flex;gap:10px;align-items:center}
 .settings-note{font-size:11px;color:var(--muted)}
-.universe-actions{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.universe-actions .note{font-size:11px;color:var(--muted)}
+.list-note{grid-column:1/-1;font-size:11px;color:var(--muted)}
 .accent{color:var(--accent)}
 .muted{color:var(--muted)}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -133,7 +132,7 @@ button,input,select{font:inherit}
   </section>
 
   <section class="section">
-    <div class="section-head"><h2>Capital, strategy &amp; universe settings</h2><div class="meta">Capital applies immediately; channel and universe changes apply to the next daily scan</div></div>
+    <div class="section-head"><h2>Capital, strategy &amp; coin list</h2><div class="meta">Capital applies immediately; channel and universe changes apply to the next daily scan</div></div>
     <div class="settings-grid">
       <div class="field"><label for="setCapital">Funded capital (USDT)</label><input id="setCapital" type="number" min="10" max="1000000" step="any"></div>
       <div class="field"><label for="setRiskPct">Risk per trade (% of equity)</label><input id="setRiskPct" type="number" min="0.01" max="10" step="0.01"></div>
@@ -146,16 +145,9 @@ button,input,select{font:inherit}
       <div class="field"><label for="setWorkers">Concurrent workers</label><input id="setWorkers" type="number" min="1" max="100"></div>
       <p>Sizing: qty = (risk % × equity) / (2 × ATR). Long-only spot, one position per symbol, no stop orders — positions close only when the daily close breaks the 20-day low. Daily loss limit −3R. Orders need available Testnet funds; recorded P&amp;L is before fees.</p>
 
-      <div class="field"><label for="setUniverseSelect">List to edit</label><select id="setUniverseSelect"></select></div>
-      <div class="field"><label for="setUniverseName">Universe name</label><input id="setUniverseName" type="text" placeholder="Core 10"></div>
-      <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Symbols (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
-      <div class="universe-actions">
-        <button id="setUniverseNew" class="btn secondary small" type="button">NEW UNIVERSE</button>
-        <button id="setUniverseSave" class="btn secondary small" type="button">APPLY LIST EDITS</button>
-        <button id="setUniverseActivate" class="btn start small" type="button">ACTIVATE UNIVERSE</button>
-        <button id="setUniverseDelete" class="btn stop small" type="button">DELETE UNIVERSE</button>
-        <span id="universeNote" class="note">Edit this list’s name or coins, then SAVE SETTINGS. Held coins remain monitored for exits if removed.</span>
-      </div>
+      <div class="field"><label for="setUniverseName">List name</label><input id="setUniverseName" type="text" placeholder="Core 10"></div>
+      <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Coins (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
+      <div class="list-note">Edit the name or add/remove coins, then SAVE SETTINGS. Removed coins with open positions stay monitored for exits.</div>
 
       <div class="field check"><input id="setTelegramEnabled" type="checkbox"><label for="setTelegramEnabled">Telegram alerts enabled</label></div>
       <div class="field"><label for="setTelegramChat">Telegram chat ID</label><input id="setTelegramChat" type="text"></div>
@@ -173,7 +165,6 @@ button,input,select{font:inherit}
   let settingsInitialized = false;
   let universeDraft = [];
   let activeUniverseName = '';
-  let editingUniverseName = null;
   const $ = id => document.getElementById(id);
   const money = v => v == null ? '—' : `${Number(v)>=0?'+':''}${Number(v).toFixed(2)} USDT`;
   const num = (v,d=4) => v == null ? '—' : Number(v).toLocaleString(undefined,{maximumFractionDigits:d});
@@ -266,48 +257,37 @@ button,input,select{font:inherit}
     $('setWorkers').value=s.scan_workers;
     universeDraft=JSON.parse(JSON.stringify(s.universes||[]));
     activeUniverseName=s.active_universe||'';
-    refreshUniverseSelect(activeUniverseName);
+    loadUniverseInputs(activeUniverseName);
     $('setTelegramEnabled').checked=!!s.telegram_enabled;
     $('setTelegramChat').value=s.telegram_chat_id||'';
     $('setTelegramToken').placeholder=s.telegram_token_configured?'Configured — leave blank to keep':'Not configured';
   }
 
-  function refreshUniverseSelect(selectedName){
-    const sel=$('setUniverseSelect');
-    sel.innerHTML=universeDraft.map(u=>`<option value="${esc(u.name)}">${esc(u.name)} (${u.symbols.length})</option>`).join('');
-    const target=selectedName||activeUniverseName;
-    const found=universeDraft.find(u=>u.name.toLowerCase()===String(target||'').toLowerCase());
-    sel.value=found?found.name:(universeDraft[0]?universeDraft[0].name:'');
-    if(sel.value) loadUniverseInputs(sel.value);
-  }
   function loadUniverseInputs(name){
     const u=universeDraft.find(x=>x.name.toLowerCase()===String(name||'').toLowerCase());
     if(!u)return;
-    editingUniverseName=u.name;
     $('setUniverseName').value=u.name;
     $('setUniverseSymbols').value=u.symbols.join(', ');
   }
   function readUniverseInputs(){
     const name=$('setUniverseName').value.trim();
     const symbols=$('setUniverseSymbols').value.split(/[\s,]+/).map(x=>x.trim().toUpperCase()).filter(Boolean);
-    if(!name) throw new Error('Universe needs a name');
-    if(!symbols.length) throw new Error('Universe needs at least one symbol');
+    if(!name) throw new Error('List needs a name');
+    if(!symbols.length) throw new Error('List needs at least one coin');
     const bad=symbols.find(x=>!x.endsWith('USDT'));
-    if(bad) throw new Error(`Universe symbols must be USDT pairs: ${bad}`);
+    if(bad) throw new Error(`Coins must be USDT pairs: ${bad}`);
     return {name, symbols:[...new Set(symbols)]};
   }
   function upsertUniverse(){
     const rec=readUniverseInputs();
-    const i=editingUniverseName===null ? -1 : universeDraft.findIndex(u=>u.name.toLowerCase()===editingUniverseName.toLowerCase());
+    const i=universeDraft.findIndex(u=>u.name.toLowerCase()===activeUniverseName.toLowerCase());
     const collision=universeDraft.findIndex(u=>u.name.toLowerCase()===rec.name.toLowerCase());
     if(collision>=0 && collision!==i) throw new Error('Another list already uses this name. Choose a different name.');
-    if(editingUniverseName!==null && i<0) throw new Error('Selected list no longer exists. Select it again.');
-    if(i>=0){
-      const wasActive=universeDraft[i].name.toLowerCase()===activeUniverseName.toLowerCase();
-      universeDraft[i]=rec;
-      if(wasActive) activeUniverseName=rec.name;
-    }else universeDraft.push(rec);
-    refreshUniverseSelect(rec.name);
+    if(i<0) throw new Error('Current list is unavailable. Reload the dashboard.');
+    // Keep any previously saved records intact; this form edits only the active list.
+    universeDraft[i]=rec;
+    activeUniverseName=rec.name;
+    loadUniverseInputs(rec.name);
     return rec;
   }
 
@@ -391,21 +371,6 @@ button,input,select{font:inherit}
   $('startBtn').addEventListener('click',()=>action('/api/start'));
   $('stopBtn').addEventListener('click',()=>action('/api/stop'));
   $('saveSettingsBtn').addEventListener('click',saveSettings);
-  $('setUniverseSelect').addEventListener('change',e=>loadUniverseInputs(e.target.value));
-  $('setUniverseNew').addEventListener('click',()=>{editingUniverseName=null;$('setUniverseSelect').value='';$('setUniverseName').value='';$('setUniverseSymbols').value='';$('setUniverseName').focus();note('New universe: fill the fields, then SAVE SETTINGS.');});
-  $('setUniverseSave').addEventListener('click',()=>{try{const rec=upsertUniverse();note(`Universe "${rec.name}" staged locally. PRESS SAVE SETTINGS to apply.`);}catch(e){showError(e.message)}});
-  $('setUniverseActivate').addEventListener('click',()=>{try{const rec=upsertUniverse();activeUniverseName=rec.name;note(`Active universe will be "${rec.name}". PRESS SAVE SETTINGS to apply.`);}catch(e){showError(e.message)}});
-  $('setUniverseDelete').addEventListener('click',()=>{
-    try{
-      const target=$('setUniverseSelect').value;
-      if(!target) return;
-      if(universeDraft.length<=1) throw new Error('At least one universe must remain');
-      if(target.toLowerCase()===String(activeUniverseName).toLowerCase()) throw new Error('Activate another universe before deleting this one');
-      universeDraft=universeDraft.filter(u=>u.name!==target);
-      refreshUniverseSelect(activeUniverseName);
-      note(`Universe "${target}" removed locally. PRESS SAVE SETTINGS to apply.`);
-    }catch(e){showError(e.message)}
-  });
   document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');
     ['closed','entry','exit','noaction'].forEach(k=>$(k+'Panel').classList.toggle('hidden',k!==b.dataset.tab));

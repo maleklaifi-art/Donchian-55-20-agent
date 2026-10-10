@@ -97,7 +97,8 @@ context.render({
 assert.equal(elements.get('balance').textContent, '510 USDT');
 assert.equal(elements.get('equity').textContent, '520 USDT');
 assert.equal(elements.get('setCapital').value, 500);
-assert.equal(elements.get('setUniverseSelect').value, 'Core 10');
+assert.equal(elements.get('setUniverseName').value, 'Core 10');
+for(const removed of ['setUniverseSelect','setUniverseNew','setUniverseSave','setUniverseActivate','setUniverseDelete']) assert.ok(!ids.has(removed));
 assert.match(elements.get('setUniverseSymbols').value, /BTCUSDT, ETHUSDT/);
 assert.match(elements.get('strategyRule').textContent, /55\/20 Donchian · ATR\(20\) × 2 · risk 1% · Daily at 00:00 UTC/);
 assert.match(elements.get('capitalSummary').textContent, /available demo cash 460/);
@@ -122,12 +123,13 @@ elements.get('setUniverseName').value = 'Other';
 assert.throws(()=>context.upsertUniverse(), /already uses this name/);
 assert.equal(context.settingsPayload().universes.length, 2);
 assert.equal(context.settingsPayload().active_universe, 'Core 10');
-// Editing an inactive list must not activate it.
-context.loadUniverseInputs('Other');
-elements.get('setUniverseName').value = 'Other renamed';
+// Simplifying the editor must preserve any previously saved inactive records.
+elements.get('setUniverseName').value = 'Active renamed';
 context.upsertUniverse();
-assert.equal(context.settingsPayload().active_universe, 'Core 10');
-// SAVE SETTINGS must capture typed edits without APPLY LIST EDITS first.
+assert.equal(context.settingsPayload().active_universe, 'Active renamed');
+assert.equal(context.settingsPayload().universes.length, 2);
+assert.deepEqual(JSON.parse(JSON.stringify(context.settingsPayload().universes[1])), {name:'Other',symbols:['LTCUSDT']});
+// SAVE SETTINGS directly captures edits to the single visible active list.
 context.renderSettings(settings);
 elements.get('setUniverseName').value = 'Direct edit';
 elements.get('setUniverseSymbols').value = 'ETHUSDT,LINKUSDT';

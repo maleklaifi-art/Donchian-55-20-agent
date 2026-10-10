@@ -39,7 +39,7 @@ The dashboard shows:
 - Win rate, wins/losses, realized R, today's R and P&L.
 - START NEW TRADES and STOP NEW TRADES controls.
 - Editable strategy settings: funded capital, risk %, entry/exit periods, ATR period/multiplier, daily history length, entry grace window, scan workers.
-- Named, switchable universes (default **Core 10**: BTC, ETH, BNB, SOL, XRP, ADA, AVAX, DOT, LINK, LTC) with create/activate/delete controls.
+- One editable active coin list (default **Core 10**: BTC, ETH, BNB, SOL, XRP, ADA, AVAX, DOT, LINK, LTC): change its name or coins and press SAVE SETTINGS.
 - Optional Telegram notifications.
 
 **STOP NEW TRADES does not close existing positions.** Open positions continue to be flattened by the daily channel exit.
@@ -146,9 +146,9 @@ Mount a persistent Railway volume at `/data` to keep future trades, settings, ca
 
 ### Edit the current universe
 
-In **Capital, strategy & universe settings**, select the existing **List to edit**.
-Change its name or add/remove full USDT pairs in **Symbols**, then click **SAVE SETTINGS**.
-You do not need to create a new universe or click APPLY LIST EDITS first.
+In **Capital, strategy & coin list**, edit **List name** or add/remove full USDT pairs
+in **Coins**, then click **SAVE SETTINGS**. The current active list loads automatically;
+there is no list selector or separate create/activate/delete workflow.
 Renaming preserves the list and its active status; duplicate names are rejected.
 Changes apply on the next scan. Removing a held coin prevents future entries in that
 coin but keeps daily exit checks until its position closes; it does not sell immediately.
