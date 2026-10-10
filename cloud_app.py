@@ -15,7 +15,6 @@ from urllib.parse import parse_qs
 
 from database import TradeDatabase
 from demo_trader import (
-    MAX_POSITION_NOTIONAL_USDT,
     BotConfig,
     EventLogger,
     PublicMarketClient,
@@ -260,7 +259,6 @@ class CloudDemoEngine:
         with self.state_lock:
             state = load_state(self.cfg.state_file)
             self.db.backfill_state(state)
-            realized = self.db.stats()["realized_pnl_usdt"]
             for row in snapshot.get("exit_signals", []):
                 if self.storage_error:
                     continue
@@ -268,6 +266,8 @@ class CloudDemoEngine:
                     close_position(Signal(**row), self.market, self.exec_client, self.rules, state, self.cfg, self.logger)
                 except Exception as exc:
                     self.logger.emit("EXIT_ERROR", symbol=row.get("symbol"), error=str(exc))
+            # Exits can realize gains/losses and release cash in this same batch.
+            realized = self.db.stats()["realized_pnl_usdt"]
             for row in snapshot.get("signals", []):
                 sig = Signal(**row)
                 if self.storage_error:
@@ -425,7 +425,10 @@ class CloudDemoEngine:
             "risk": {
                 "risk_per_trade_pct": settings.risk_per_trade_pct,
                 "sizing_rule": "risk % of equity / (2 x ATR)",
-                "max_position_notional_usdt": min(MAX_POSITION_NOTIONAL_USDT, self.cfg.max_position_notional_usdt),
+                # Keep the response key for existing clients; null means uncapped.
+                "max_position_notional_usdt": None,
+                "equity_basis": "funded balance plus open P&L, bounded by Testnet backing",
+                "cash_reserve_pct": 0.5,
                 "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
                 "starting_capital_usdt": self.cfg.demo_equity_cap_usdt,

@@ -12,18 +12,20 @@ The agent does not use AI discretion to invent trades. It scans independently in
 
 - **Entry** — right after `00:00 UTC`, if the just-closed daily close is strictly above the highest high of the previous **55** daily candles (signal day excluded, no lookahead), submit a market BUY within the grace window (default **15 minutes**). Signals outside the window are rejected as stale.
 - **Exit** — if a position is held and the just-closed daily close is strictly below the lowest low of the previous **20** daily candles (signal day excluded), submit a market SELL. There is **no grace window** on exits: restart recovery may flatten the position whenever the condition holds.
-- **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. Notional is additionally capped at `min(100 USDT, configured cap, available cash × 0.995)`.
+- **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. There is **no fixed dollar position cap**. Equity includes current open-position P&L and is bounded by actual Testnet backing. The order uses at most `available cash × 0.995` to preserve the existing 0.5% cash reserve for fees/movement. Unrealized gains affect risk sizing but cannot be spent as cash.
 - **No stop orders / no OCO.** Exits happen only through the daily 20-day-low channel exit (legacy positions opened with protective OCO orders are still reconciled by the exit monitor).
 - Long-only, spot, one open position per symbol, one entry per signal (exactly-once state).
 
 ## Risk management
 
 - Funded demo capital defaults to **$200 USDT** and is editable in the dashboard. Balance = funded capital + recorded realized P&L; equity also includes open P&L.
-- Risk per trade is a percentage of equity (default **1%**), converted to quantity via `1/(2 × ATR20)`; the intended planned risk is the distance to the exit channel scaled by that ATR rule.
+- Risk per trade is a percentage of equity (default **1%**), converted to quantity via `1/(2 × ATR20)`; **2 × ATR is a sizing distance, not a stop-loss order or a maximum possible loss**. The 20-day-low exit may realize losses larger than 1R.
 - Multiple positions are allowed when available demo balance can fund them.
 - Daily loss cutoff: **-3R**; new trades stop for the rest of the UTC day.
 - No leverage.
-- Maximum position notional: **$100 USDT**, subject to available balance and exchange minimums.
+- No fixed position-notional cap or fixed $2 risk ceiling. A $200 equity account budgets $2 at 1%; a $500 equity account budgets $5. Orders remain subject to available cash and exchange minimums.
+- Legacy `max_position_notional_usdt` / `max_position_notional_pct` config keys are ignored, so an old config file cannot silently restore the removed ceiling.
+- New entries require valid current marks for every nonzero held position. A failed mark blocks that entry instead of guessing account equity. Exit monitoring continues normally.
 - Same symbol cannot have a second open position.
 - The same signal cannot be submitted twice.
 - Stablecoin/fiat quote pairs are excluded: `BFUSDUSDT`, `EURIUSDT`, `EURUSDT`, `USD1USDT`, `USDEUSDT`, `XUSDUSDT`, `FDUSDUSDT`, `USDCUSDT`, `TUSDUSDT`, `USDPUSDT`, `AEURUSDT`, `RLUSDUSDT`, `UUSDT`.

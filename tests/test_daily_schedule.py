@@ -77,3 +77,26 @@ def test_retry_only_when_latest_closed_candle_is_missing(tmp_path, monkeypatch, 
     if signals:
         assert result['signals'][0]['entry'] == 110
         assert result['signals'][0]['signal_close_ms'] == 61 * DAY_MS - 1
+
+
+def test_same_scan_exits_update_balance_before_entry_sizing(app, monkeypatch, tmp_path):
+    db = Mock()
+    db.stats.return_value = {"realized_pnl_usdt": -5}
+    state = {"open_positions": {}, "realized": []}
+    monkeypatch.setattr(app, "load_state", lambda path: state)
+    monkeypatch.setattr(app, "Signal", lambda **row: SimpleNamespace(**row))
+    def close(*args):
+        db.stats.return_value = {"realized_pnl_usdt": 10}
+    monkeypatch.setattr(app, "close_position", close)
+    submit = Mock()
+    monkeypatch.setattr(app, "place_signal", submit)
+    engine = SimpleNamespace(state_lock=threading.RLock(), db=db,
+                             cfg=SimpleNamespace(state_file=str(tmp_path / "state.json")),
+                             market=Mock(), exec_client=Mock(), rules={}, logger=Mock(),
+                             storage_error=None)
+    app.CloudDemoEngine._execute_snapshot(engine, {
+        "exit_signals": [{"symbol": "OLDUSDT", "signal_close_ms": 1}],
+        "signals": [{"symbol": "NEWUSDT", "signal_close_ms": 1}],
+    })
+    submit.assert_called_once()
+    assert submit.call_args.kwargs["realized_pnl_usdt"] == 10

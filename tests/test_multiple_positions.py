@@ -98,15 +98,79 @@ def test_larger_atr_produces_a_smaller_position_with_the_same_risk(setup):
     assert setup[2]["open_positions"]["AAAUSDT"]["risk_usdt"] == pytest.approx(2.0)
 
 
-@pytest.mark.parametrize("atr,cap,expected", [(1.0, 100, 90.0), (1.0, 25, 25.0),
-                                              (10.0, 100, 9.0), (0.1, 100, 100.0)])
-def test_absolute_notional_ceiling_caps_the_formula(setup, atr, cap, expected):
-    setup[0].max_position_notional_usdt = cap
+@pytest.mark.parametrize("atr,legacy_cap,expected", [(1.0, 100, 90.0), (1.0, 25, 90.0),
+                                                     (10.0, 100, 9.0), (0.1, 100, 199.0)])
+def test_legacy_caps_do_not_limit_risk_based_size(setup, tmp_path, atr, legacy_cap, expected):
+    path = tmp_path / "legacy_caps.json"
+    path.write_text('{"max_position_notional_usdt":' + str(legacy_cap) +
+                    ',"max_position_notional_pct":1}')
+    cfg = load_config(str(path))
+    assert not hasattr(cfg, "max_position_notional_usdt")
+    assert not hasattr(cfg, "max_position_notional_pct")
+    cfg.state_file, cfg.kill_switch_file = setup[0].state_file, setup[0].kill_switch_file
+    context = (cfg, *setup[1:])
     exchange = Exchange()
-    enter(signal(atr=atr), exchange, setup)
+    enter(signal(atr=atr), exchange, context)
     assert exchange.buys == [("AAAUSDT", pytest.approx(expected))]
-    pos = setup[2]["open_positions"]["AAAUSDT"]
-    assert 0 < pos["risk_usdt"] <= 2.0
+    assert 0 < context[2]["open_positions"]["AAAUSDT"]["risk_usdt"] <= 2.0
+
+
+def test_reference_btc_size_has_no_100_dollar_cap_or_two_dollar_risk_cap(setup):
+    setup[0].demo_equity_cap_usdt = 10_000
+    setup[1].best_ask.return_value = 60_200
+    exchange = Exchange(free=10_000, fill_price=60_200)
+    enter(signal("BTCUSDT", atr=1500, price=60_000), exchange, setup)
+    assert exchange.buys[0][1] == pytest.approx((100 / 3000) * 60_200)
+    event = next(c.kwargs for c in setup[3].emit.call_args_list if c.args[0] == "ENTRY_SUBMIT")
+    assert event["risk_budget_usdt"] == 100
+    assert event["sizing_equity_usdt"] == 10_000
+
+
+@pytest.mark.parametrize("mark,expected_equity,expected_quote", [(150, 250, 11.25), (50, 150, 6.75)])
+def test_open_pnl_changes_risk_size_but_not_spendable_cash(setup, mark, expected_equity, expected_quote):
+    old = {"entry_price": 100, "quantity": 1, "risk_usdt": 2}
+    setup[2]["open_positions"]["OLDUSDT"] = deepcopy(old)
+    setup[1].best_ask.side_effect = lambda symbol: mark if symbol == "OLDUSDT" else 90
+    exchange = Exchange(free=100)
+    enter(signal(atr=10), exchange, setup)
+    assert exchange.buys[0][1] == pytest.approx(expected_quote)
+    event = next(c.kwargs for c in setup[3].emit.call_args_list if c.args[0] == "ENTRY_SUBMIT")
+    assert event["sizing_equity_usdt"] == expected_equity
+    assert event["risk_budget_usdt"] == pytest.approx(expected_equity * .01)
+    assert event["available_quote_usdt"] == 100
+    assert setup[2]["open_positions"]["OLDUSDT"] == old
+
+
+def test_large_unrealized_gain_cannot_be_spent_as_cash(setup):
+    setup[2]["open_positions"]["OLDUSDT"] = {"entry_price": 190, "quantity": 1}
+    setup[1].best_ask.side_effect = lambda symbol: 1000 if symbol == "OLDUSDT" else 90
+    exchange = Exchange(free=10_000)
+    enter(signal(atr=.1), exchange, setup)
+    assert exchange.buys[0][1] == pytest.approx(9.95)
+
+
+@pytest.mark.parametrize("mark", [0, -1, float('nan'), float('inf'), RuntimeError('price unavailable')])
+def test_invalid_open_position_mark_blocks_entry_without_changing_existing_trade(setup, mark):
+    old = {"entry_price": 100, "quantity": 1, "risk_usdt": 2}
+    setup[2]["open_positions"]["OLDUSDT"] = deepcopy(old)
+    if isinstance(mark, Exception):
+        setup[1].best_ask.side_effect = mark
+    else:
+        setup[1].best_ask.return_value = mark
+    exchange = Exchange(free=100)
+    enter(signal(), exchange, setup)
+    assert not exchange.buys and not exchange.sells
+    assert setup[2]["open_positions"] == {"OLDUSDT": old}
+    assert setup[3].emit.call_args.kwargs["reason"] == "account equity unavailable"
+
+
+@pytest.mark.parametrize("ask", [0, -1, float('nan'), float('inf')])
+def test_invalid_entry_ask_cannot_submit(setup, ask):
+    setup[1].best_ask.return_value = ask
+    exchange = Exchange()
+    enter(signal(), exchange, setup)
+    assert not exchange.buys
+    assert setup[3].emit.call_args.kwargs["reason"] == "invalid entry ask"
 
 
 def test_multiple_positions_have_independent_risk_and_shared_cash_caps(setup):

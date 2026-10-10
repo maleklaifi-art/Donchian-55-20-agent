@@ -33,7 +33,6 @@ from strategy import (
 
 PRODUCTION_MARKET_BASE = "https://api.binance.com"
 TESTNET_EXECUTION_BASE = "https://testnet.binance.vision"
-MAX_POSITION_NOTIONAL_USDT = 100.0
 # User-specified stablecoin/fiat pairs. Exact matches avoid excluding unrelated coins.
 EXCLUDED_SYMBOLS = frozenset({
     "BFUSDUSDT", "EURIUSDT", "EURUSDT", "USD1USDT", "USDEUSDT", "XUSDUSDT",
@@ -54,8 +53,6 @@ class BotConfig:
     # Per-trade risk: risk_per_trade_pct of equity, sized via 2 x ATR(20).
     risk_per_trade_pct: float = 1.0
     daily_loss_limit_r: float = 3.0
-    max_position_notional_pct: float = 100.0
-    max_position_notional_usdt: float = MAX_POSITION_NOTIONAL_USDT
     demo_equity_cap_usdt: float = 200.0  # funded capital; balance also includes realized P&L
     entry_grace_minutes: int = 15
 
@@ -685,10 +682,36 @@ def place_signal(
     # Realized profits/losses change the funded bankroll. Existing commitments
     # remain reserved, and orders cannot spend more than actual Testnet cash.
     balance = demo_balance_usdt(cfg, state, realized_pnl_usdt)
-    equity = min(usdt_free + open_notional, balance)
     available_quote = min(usdt_free, max(0.0, balance - open_notional))
-    if equity <= 0 or available_quote <= 0:
+    if available_quote <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no free demo quote balance", signal_key=key)
+        return
+
+    # The risk budget includes open P&L; unrealized gains never become spendable
+    # cash. Use fresh public marks, including held coins removed from the list.
+    # Missing/invalid marks must not silently size an order from stale entry costs.
+    open_value = 0.0
+    try:
+        if not all(math.isfinite(v) for v in (usdt_free, open_notional, available_quote)):
+            raise ValueError("non-finite account or position balance")
+        for symbol, position in state.get("open_positions", {}).items():
+            quantity = float(position.get("quantity", 0))
+            entry_price = float(position.get("entry_price", 0))
+            if not math.isfinite(quantity) or quantity < 0 or not math.isfinite(entry_price) or entry_price < 0:
+                raise ValueError(f"invalid held position: {symbol}")
+            if quantity == 0:
+                continue
+            mark = float(market.best_ask(symbol))
+            if not math.isfinite(mark) or mark <= 0:
+                raise ValueError(f"invalid equity mark: {symbol}")
+            open_value += quantity * mark
+        unrealized_pnl = open_value - open_notional
+        equity = min(balance + unrealized_pnl, usdt_free + open_value)
+        if not math.isfinite(equity) or equity <= 0:
+            raise ValueError("no positive finite account equity")
+    except Exception as exc:
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key,
+                    reason="account equity unavailable", error=str(exc))
         return
 
     stop_distance = float(sig.stop_distance)
@@ -702,17 +725,15 @@ def place_signal(
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no per-trade risk budget", signal_key=key)
         return
 
-    live_ask = market.best_ask(sig.symbol)
+    live_ask = float(market.best_ask(sig.symbol))
+    if not math.isfinite(live_ask) or live_ask <= 0:
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="invalid entry ask")
+        return
     qty = risk_budget / stop_distance
     quote_notional = qty * live_ask
-    max_notional = min(
-        MAX_POSITION_NOTIONAL_USDT,
-        cfg.max_position_notional_usdt,
-        equity * cfg.max_position_notional_pct / 100.0,
-        # Leave a tiny buffer for testnet price movement/fees.
-        available_quote * 0.995,
-    )
-    quote_notional = min(quote_notional, max_notional)
+    # No fixed dollar or configured percentage notional ceiling. Preserve the
+    # existing cash reserve for fees/movement and never borrow to fill the size.
+    quote_notional = min(quote_notional, available_quote * 0.995)
     if quote_notional <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no order budget", signal_key=key)
         return
@@ -733,6 +754,8 @@ def place_signal(
         "ENTRY_SUBMIT",
         symbol=sig.symbol, signal_key=key, signal_entry=sig.entry, live_ask=live_ask,
         atr=sig.atr, stop_distance=stop_distance, risk_budget_usdt=risk_budget,
+        sizing_equity_usdt=equity, unrealized_pnl_usdt=unrealized_pnl,
+        available_quote_usdt=available_quote,
         quote_order_qty=fmt_dec(quote_dec),
     )
     entry = exec_client.market_buy_quote(sig.symbol, fmt_dec(quote_dec), entry_cid)
