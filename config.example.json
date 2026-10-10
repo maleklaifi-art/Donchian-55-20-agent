@@ -7,7 +7,6 @@
   "universe_symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT"],
 
   "risk_per_trade_pct": 1.0,
-  "daily_loss_limit_r": 3.0,
   "demo_equity_cap_usdt": 200.0,
   "entry_grace_minutes": 15,
 

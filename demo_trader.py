@@ -20,6 +20,9 @@ from urllib.parse import urlencode
 import requests
 from requests.adapters import HTTPAdapter
 
+from daily_history import DailyHistory
+from execution_accounting import commissions, position_cost
+
 from strategy import (
     DEFAULT_UNIVERSE_SYMBOLS,
     Candle,
@@ -52,7 +55,6 @@ class BotConfig:
 
     # Per-trade risk: risk_per_trade_pct of equity, sized via 2 x ATR(20).
     risk_per_trade_pct: float = 1.0
-    daily_loss_limit_r: float = 3.0
     demo_equity_cap_usdt: float = 200.0  # funded capital; balance also includes realized P&L
     entry_grace_minutes: int = 15
 
@@ -92,6 +94,18 @@ class Position:
     atr: Optional[float] = None
     exit_channel: Optional[float] = None
     entry_channel: Optional[float] = None
+    entry_cost_usdt: Optional[float] = None
+    entry_fee_usdt: Optional[float] = None
+    fee_accounting_complete: Optional[bool] = None
+    entry_fee_details: list = field(default_factory=list)
+    # Persist partial exit proceeds until the entire trade has closed.
+    exit_proceeds_usdt: float = 0.0
+    exit_quantity: float = 0.0
+    exit_quote_usdt: float = 0.0
+    exit_fee_usdt: float = 0.0
+    exit_order_ids: list = field(default_factory=list)
+    pending_exit_signal: Optional[dict] = None
+    pending_exit_client_id: str = ""
     # Legacy OCO bookkeeping (positions opened before the Donchian cutover).
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -118,7 +132,8 @@ class EventLogger:
 
 
 class PublicMarketClient:
-    def __init__(self, timeout_s: int):
+    def __init__(self, timeout_s: int, history_dir="daily_klines"):
+        self.history = DailyHistory(history_dir)
         self.base = PRODUCTION_MARKET_BASE
         self.timeout_s = timeout_s
         self.s = requests.Session()
@@ -162,6 +177,8 @@ class PublicMarketClient:
         ]
 
     def klines(self, symbol: str, interval: str, limit: int = 1000) -> List[Candle]:
+        if interval == "1d":
+            return self.history.fetch(self.get, symbol, int(time.time() * 1000), limit)
         rows = self.get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": min(limit, 1000)})
         return [
             Candle(
@@ -225,6 +242,10 @@ class TestnetExecutionClient:
 
     def account(self):
         return self._signed("GET", "/api/v3/account", {"omitZeroBalances": "true"})
+
+    def order_trades(self, symbol: str, order_id: int):
+        return self._signed("GET", "/api/v3/myTrades",
+                            {"symbol": symbol, "orderId": order_id, "limit": 1000})
 
     def open_orders(self):
         return self._signed("GET", "/api/v3/openOrders")
@@ -503,7 +524,8 @@ def scan_market_detailed(
             except Exception as exc:
                 errors += 1
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
-    entries.sort(key=lambda x: x.signal_close_ms)
+    priority = {symbol: i for i, symbol in enumerate(cfg.universe_symbols)}
+    entries.sort(key=lambda x: (x.signal_close_ms, priority.get(x.symbol, len(priority)), x.symbol))
     exits.sort(key=lambda x: x.symbol)
     filtered.sort(key=lambda x: x["symbol"])
     Path(cfg.signal_log).write_text(json.dumps([x.to_dict() for x in entries], indent=2), encoding="utf-8")
@@ -540,6 +562,13 @@ def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: Eve
     changed = False
     for sym, pd in list(state.get("open_positions", {}).items()):
         pos = Position(**pd)
+        if pos.pending_exit_signal and market is not None:
+            try:
+                close_position(Signal(**pos.pending_exit_signal), market, exec_client,
+                               rules or {}, state, cfg, logger)
+            except Exception as exc:
+                logger.emit("POSITION_SYNC_ERROR", symbol=sym, error=str(exc))
+            continue
         if not pos.tp_order_id and not pos.oco_order_list_id:
             # Donchian positions carry no protective orders; live prices are
             # refreshed by the engine. Only legacy OCO positions are reconciled.
@@ -604,15 +633,15 @@ def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
     if Path(cfg.kill_switch_file).exists():
         logger.emit("NEW_ENTRIES_BLOCKED", reason="kill switch file exists", file=cfg.kill_switch_file)
         return False
-    dr = daily_realized_r(state)
-    if dr <= -abs(cfg.daily_loss_limit_r):
-        logger.emit("NEW_ENTRIES_BLOCKED", reason="daily loss limit", daily_r=dr)
+    if any(p.get("fee_accounting_complete") is False
+           for p in list(state.get("open_positions", {}).values()) + state.get("realized", [])):
+        logger.emit("NEW_ENTRIES_BLOCKED", reason="exchange fees need reconciliation")
         return False
     return True
 
 
 def demo_balance_usdt(cfg: BotConfig, state: dict, realized_pnl_usdt=None) -> float:
-    """Ledger balance, before fees: funded capital plus recorded closed P&L.
+    """Ledger balance: funded capital plus recorded closed P&L (new trades net of fees).
 
     Cloud execution supplies the durable database aggregate. Standalone use
     falls back to its state ledger. Open P&L does not fund new entries.
@@ -676,8 +705,7 @@ def place_signal(
         return
     usdt_free = account_free(account, cfg.quote_asset)
     open_notional = sum(
-        float(p.get("entry_price", 0)) * float(p.get("quantity", 0))
-        for p in state.get("open_positions", {}).values()
+        position_cost(p) for p in state.get("open_positions", {}).values()
     )
     # Realized profits/losses change the funded bankroll. Existing commitments
     # remain reserved, and orders cannot spend more than actual Testnet cash.
@@ -731,9 +759,9 @@ def place_signal(
         return
     qty = risk_budget / stop_distance
     quote_notional = qty * live_ask
-    # No fixed dollar or configured percentage notional ceiling. Preserve the
-    # existing cash reserve for fees/movement and never borrow to fill the size.
-    quote_notional = min(quote_notional, available_quote * 0.995)
+    # No arbitrary reserve, fixed dollar cap or leverage. Binance spot BUY
+    # commissions normally come from received base or the fee asset (e.g. BNB).
+    quote_notional = min(quote_notional, available_quote)
     if quote_notional <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no order budget", signal_key=key)
         return
@@ -791,10 +819,8 @@ def place_signal(
             "error": str(state_exc),
         }), flush=True)
 
-    commission_base = 0.0
-    for fill in entry.get("fills", []) or []:
-        if fill.get("commissionAsset") == rule.base_asset:
-            commission_base += float(fill.get("commission", 0) or 0)
+    fees = commissions(entry, exec_client, market, rule, avg_fill)
+    commission_base = fees['base_quantity']
     position_qty_raw = max(0.0, executed_qty - commission_base)
     position_qty = floor_step(position_qty_raw, rule.step_size)
 
@@ -818,10 +844,26 @@ def place_signal(
         atr=sig.atr,
         exit_channel=sig.exit_channel,
         entry_channel=sig.entry_channel,
+        entry_cost_usdt=cumulative_quote + fees["extra_cost_usdt"],
+        entry_fee_usdt=fees["total_usdt"],
+        fee_accounting_complete=fees["complete"],
+        entry_fee_details=fees["details"],
     )
     state["open_positions"][sig.symbol] = asdict(pos)
     save_state(cfg.state_file, state)
+    if not fees["complete"]:
+        pause_for_accounting(cfg, logger, sig.symbol, fees)
     logger.emit("POSITION_OPENED", **asdict(pos))
+
+
+def pause_for_accounting(cfg, logger, symbol, fees):
+    try:
+        kill = Path(cfg.kill_switch_file)
+        kill.parent.mkdir(parents=True, exist_ok=True)
+        kill.write_text("Paused: exchange fee accounting needs reconciliation; exits remain active.\n")
+        logger.emit("FEE_ACCOUNTING_INCOMPLETE", symbol=symbol, **fees)
+    except Exception as exc:
+        print(json.dumps({"event": "FEE_ACCOUNTING_PAUSE_ERROR", "symbol": symbol, "error": str(exc)}), flush=True)
 
 
 def close_position(
@@ -836,29 +878,58 @@ def close_position(
     """Flatten a held position when the just-closed daily close broke the exit channel."""
     key = signal_key(sig)
     now_ms = int(time.time() * 1000)
-    if not is_current_signal_close(sig.signal_close_ms, now_ms):
-        logger.emit("EXIT_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale exit signal")
-        return
     pos = state.get("open_positions", {}).get(sig.symbol)
     if not pos:
         logger.emit("EXIT_REJECTED", symbol=sig.symbol, signal_key=key, reason="no open position")
         return
+    pending = pos.get("pending_exit_signal")
+    if sig.direction != "EXIT":
+        logger.emit("EXIT_REJECTED", symbol=sig.symbol, signal_key=key, reason="not an EXIT signal")
+        return
+    if not pending and not is_current_signal_close(sig.signal_close_ms, now_ms):
+        logger.emit("EXIT_REJECTED", symbol=sig.symbol, signal_key=key, reason="stale exit signal")
+        return
+    if pending:
+        sig = Signal(**pending)
+        key = signal_key(sig)
+    else:
+        pos["pending_exit_signal"] = sig.to_dict()
+        save_state(cfg.state_file, state)
     rule = rules.get(sig.symbol)
     if not rule:
         logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key, reason="symbol rules unavailable on Spot Testnet")
         return
 
-    account = exec_client.account()
-    base_free = account_free(account, rule.base_asset)
-    sell_qty = floor_step(min(float(pos.get("quantity", 0)), base_free), rule.step_size)
-    if sell_qty < rule.min_qty:
-        logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key,
-                    reason="nothing sellable: position below min quantity or base balance missing",
-                    quantity=pos.get("quantity"), base_free=base_free)
+    exit_ids = pos.get("exit_order_ids", [])
+    cid = pos.get("pending_exit_client_id")
+    if cid:
+        # A previous submission may have filled even if its response was lost.
+        # Reconcile first; never resubmit an order with an unknown outcome.
+        sell = exec_client.order(sig.symbol, orig_client_order_id=cid)
+    else:
+        account = exec_client.account()
+        base_free = account_free(account, rule.base_asset)
+        sell_qty = floor_step(min(float(pos.get("quantity", 0)), base_free), rule.step_size)
+        if sell_qty < rule.min_qty:
+            logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key,
+                        reason="nothing sellable: position below min quantity or base balance missing",
+                        quantity=pos.get("quantity"), base_free=base_free)
+            return
+        cid = deterministic_id("dcx", key + (f":{len(exit_ids)}" if exit_ids else ""))
+        pos["pending_exit_client_id"] = cid
+        save_state(cfg.state_file, state)
+        sell = exec_client.market_sell_qty(sig.symbol, fmt_dec(sell_qty), cid)
+    status = sell.get("status")
+    terminal = {"FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}
+    if status is not None and status not in terminal:
+        logger.emit("EXIT_PENDING", symbol=sig.symbol, signal_key=key, status=status)
         return
-
-    cid = deterministic_id("dcx", key)
-    sell = exec_client.market_sell_qty(sig.symbol, fmt_dec(sell_qty), cid)
+    if status in terminal and float(sell.get("executedQty", 0) or 0) == 0:
+        pos["pending_exit_client_id"] = ""
+        pos["exit_order_ids"] = [*exit_ids, int(sell.get("orderId", 0) or 0)]
+        save_state(cfg.state_file, state)
+        logger.emit("EXIT_PENDING", symbol=sig.symbol, signal_key=key, status=status)
+        return
     executed_qty = float(sell.get("executedQty", 0) or 0)
     cumulative_quote = float(sell.get("cummulativeQuoteQty", 0) or 0)
     if executed_qty <= 0 or cumulative_quote <= 0:
@@ -874,13 +945,39 @@ def close_position(
                     reason="exit fill could not be verified; position retained", response=sell)
         return
 
+    order_id = int(sell.get("orderId", 0) or 0)
+    if order_id in exit_ids:
+        logger.emit("EXIT_ERROR", symbol=sig.symbol, reason="exit fill already accounted")
+        return
     exit_price = cumulative_quote / executed_qty
+    fees = commissions(sell, exec_client, market, rule, exit_price)
     entry_price = float(pos.get("entry_price") or 0.0)
-    closed_qty = min(float(pos.get("quantity", 0)), executed_qty)
-    pnl_usdt = (exit_price - entry_price) * closed_qty
+    original_cost = pos.get("entry_cost_usdt")
+    if original_cost is None:
+        original_cost = entry_price * (float(pos.get("quantity", 0)) + float(pos.get("exit_quantity", 0)))
+    net_proceeds = cumulative_quote - fees['extra_cost_usdt']
+    total_proceeds = float(pos.get("exit_proceeds_usdt", 0)) + net_proceeds
+    closed_qty = float(pos.get("exit_quantity", 0)) + executed_qty
+    total_quote = float(pos.get("exit_quote_usdt", 0)) + cumulative_quote
+    exit_fees = float(pos.get("exit_fee_usdt", 0)) + fees['total_usdt']
+    complete = pos.get('fee_accounting_complete') is not False and fees['complete']
+    remaining = max(0.0, float(pos.get("quantity", 0)) - executed_qty - fees['base_quantity'])
+    if floor_step(remaining, rule.step_size) >= rule.min_qty:
+        pos.update(quantity=remaining, entry_cost_usdt=original_cost,
+                   exit_proceeds_usdt=total_proceeds, exit_quantity=closed_qty,
+                   exit_quote_usdt=total_quote, exit_fee_usdt=exit_fees,
+                   exit_order_ids=[*exit_ids, order_id], fee_accounting_complete=complete,
+                   pending_exit_client_id="")
+        save_state(cfg.state_file, state)
+        if not fees["complete"]:
+            pause_for_accounting(cfg, logger, sig.symbol, fees)
+        logger.emit("POSITION_UPDATED", **pos)
+        return
+    exit_price = total_quote / closed_qty
+    pnl_usdt = total_proceeds - original_cost
     risk_usdt = float(pos.get("risk_usdt") or 0.0)
     result_r = pnl_usdt / risk_usdt if risk_usdt > 0 else 0.0
-    pnl_pct = ((exit_price / entry_price) - 1.0) * 100.0 if entry_price > 0 else 0.0
+    pnl_pct = pnl_usdt / original_cost * 100.0 if original_cost > 0 else 0.0
     closed_at = datetime.now(timezone.utc)
     record = {
         "day": closed_at.date().isoformat(), "symbol": sig.symbol, "r": result_r,
@@ -892,8 +989,15 @@ def close_position(
         "quantity": closed_qty, "atr": pos.get("atr"),
         "entry_channel": pos.get("entry_channel"), "exit_channel": pos.get("exit_channel"),
         "risk_usdt": risk_usdt,
-        "entry_quote": entry_price * float(pos.get("quantity", 0)),
-        "exit_quote": cumulative_quote,
+        "entry_quote": original_cost,
+        "exit_quote": total_quote,
+        "entry_cost_usdt": original_cost,
+        "entry_fee_usdt": pos.get("entry_fee_usdt"),
+        "exit_fee_usdt": exit_fees,
+        "fee_accounting_complete": complete,
+        "accounting_basis": "net_fees" if pos.get("entry_fee_usdt") is not None else "legacy_entry_basis",
+        "exit_proceeds_usdt": total_proceeds,
+        "exit_order_ids": [*exit_ids, order_id],
         "pnl_usdt": pnl_usdt, "pnl_pct": pnl_pct,
         "entry_order_id": pos.get("entry_order_id"), "exit_order_id": int(sell.get("orderId", 0) or 0),
     }
@@ -915,6 +1019,8 @@ def close_position(
             "signal_key": key,
             "error": str(state_exc),
         }), flush=True)
+    if not fees["complete"]:
+        pause_for_accounting(cfg, logger, sig.symbol, fees)
     logger.emit("POSITION_CLOSED", **record, realized_r=result_r)
 
 
@@ -925,7 +1031,7 @@ def run_once(cfg: BotConfig, execute_demo: bool):
         risk_pct=cfg.risk_per_trade_pct,
         entry_grace_minutes=cfg.entry_grace_minutes,
     )
-    market = PublicMarketClient(cfg.request_timeout_s)
+    market = PublicMarketClient(cfg.request_timeout_s, Path(cfg.state_file).parent / "daily_klines")
     state = load_state(cfg.state_file)
 
     exec_client = None

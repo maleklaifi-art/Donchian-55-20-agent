@@ -4,3 +4,4 @@ config.json
 data/
 __pycache__/
 *.pyc
+daily_klines/

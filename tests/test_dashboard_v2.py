@@ -111,9 +111,9 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
         assert value['risk']['risk_per_trade_pct'] == 0.5
         assert value['risk']['sizing_rule'] == 'risk % of equity / (2 x ATR)'
         assert value['risk']['max_position_notional_usdt'] is None
-        assert value['risk']['cash_reserve_pct'] == 0.5
+        assert value['risk']['cash_reserve_pct'] == 0.0
         assert 'open P&L' in value['risk']['equity_basis']
-        assert value['risk']['daily_loss_limit_r'] == 3.0
+        assert value['risk']['daily_loss_limit_r'] is None
         assert app.db.closed_trades() == before_closed and app.db.open_trades() == before_open
         saved = app.SettingsStore(str(tmp_path / 'settings.json'))
         assert saved.get().starting_capital_usdt == 500

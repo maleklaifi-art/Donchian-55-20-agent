@@ -12,7 +12,7 @@ The agent does not use AI discretion to invent trades. It scans independently in
 
 - **Entry** — right after `00:00 UTC`, if the just-closed daily close is strictly above the highest high of the previous **55** daily candles (signal day excluded, no lookahead), submit a market BUY within the grace window (default **15 minutes**). Signals outside the window are rejected as stale.
 - **Exit** — if a position is held and the just-closed daily close is strictly below the lowest low of the previous **20** daily candles (signal day excluded), submit a market SELL. There is **no grace window** on exits: restart recovery may flatten the position whenever the condition holds.
-- **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. There is **no fixed dollar position cap**. Equity includes current open-position P&L and is bounded by actual Testnet backing. The order uses at most `available cash × 0.995` to preserve the existing 0.5% cash reserve for fees/movement. Unrealized gains affect risk sizing but cannot be spent as cash.
+- **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. There is **no fixed dollar position cap**. Equity includes current open-position P&L and is bounded by actual Testnet backing. The order uses at most available cash, without an arbitrary reserve. Unrealized gains affect risk sizing but cannot be spent as cash.
 - **No stop orders / no OCO.** Exits happen only through the daily 20-day-low channel exit (legacy positions opened with protective OCO orders are still reconciled by the exit monitor).
 - Long-only, spot, one open position per symbol, one entry per signal (exactly-once state).
 
@@ -21,7 +21,7 @@ The agent does not use AI discretion to invent trades. It scans independently in
 - Funded demo capital defaults to **$200 USDT** and is editable in the dashboard. Balance = funded capital + recorded realized P&L; equity also includes open P&L.
 - Risk per trade is a percentage of equity (default **1%**), converted to quantity via `1/(2 × ATR20)`; **2 × ATR is a sizing distance, not a stop-loss order or a maximum possible loss**. The 20-day-low exit may realize losses larger than 1R.
 - Multiple positions are allowed when available demo balance can fund them.
-- Daily loss cutoff: **-3R**; new trades stop for the rest of the UTC day.
+- No daily loss cutoff. The manual pause, stale-signal checks and duplicate-order protection remain.
 - No leverage.
 - No fixed position-notional cap or fixed $2 risk ceiling. A $200 equity account budgets $2 at 1%; a $500 equity account budgets $5. Orders remain subject to available cash and exchange minimums.
 - Legacy `max_position_notional_usdt` / `max_position_notional_pct` config keys are ignored, so an old config file cannot silently restore the removed ceiling.
@@ -40,7 +40,7 @@ The dashboard shows:
 - **Closed**, **Entry signals**, **Exit signals** and **No action** tabs with the exact stage and reason for every filtered symbol.
 - Win rate, wins/losses, realized R, today's R and P&L.
 - START NEW TRADES and STOP NEW TRADES controls.
-- Editable strategy settings: funded capital, risk %, entry/exit periods, ATR period/multiplier, daily history length, entry grace window, scan workers.
+- Editable strategy settings: funded capital, risk %, entry/exit periods, ATR period/multiplier, history fetch page size, entry grace window, scan workers.
 - One editable active coin list (default **Core 10**: BTC, ETH, BNB, SOL, XRP, ADA, AVAX, DOT, LINK, LTC): change its name or coins and press SAVE SETTINGS.
 - Optional Telegram notifications.
 
@@ -141,7 +141,7 @@ If `DASHBOARD_PASSWORD` is missing, the service uses `demo-change-me` and displa
 
 Use **Capital & strategy settings → Funded capital (USDT) → SAVE SETTINGS**. Any finite amount in the accepted range is enforced by the API. Changing this funding base does not reset P&L or alter open positions; for example, 500 capital and +10 Closed P&L gives a 510 balance. It does not deposit funds into Testnet. Available demo cash subtracts open entry cost; order placement also checks actual Testnet free funds. If capital is reduced below current commitments, new entries wait for available funds while exits continue.
 
-Balance and equity use the existing recorded price-to-price P&L before fees, not a fee-inclusive exchange account statement. Closed trades are retained in SQLite without truncation; the dashboard currently displays the most recent 100 while accounting includes every saved Closed record. A restart does not add the same profit twice.
+New trades use actual exchange commissions: entry cost includes the full quote paid and any quote/third-asset fees; base-asset fees reduce the received quantity. Exit proceeds subtract quote/third-asset fees. Third-asset fees use the public conversion ask at accounting time. Small unsellable quantity dust is conservatively written off. If fee details cannot be verified, the fill is retained and new entries pause for reconciliation; exits continue. Existing closed records remain unchanged, and older open positions retain their legacy entry basis. Therefore old and new results have different fee conventions. Closed trades are retained in SQLite without truncation; the dashboard currently displays the most recent 100 while accounting includes every saved Closed record. A restart does not add the same profit twice.
 
 Mount a persistent Railway volume at `/data` to keep future trades, settings, capital and position state across redeployments. The Railway service refuses **new** entries if this directory is not a mount; existing exit monitoring remains active. Local development continues to use its normal data folder. Storage readiness appears in Engine status. No volume is created by the application itself.
 
@@ -154,3 +154,9 @@ there is no list selector or separate create/activate/delete workflow.
 Renaming preserves the list and its active status; duplicate names are rejected.
 Changes apply on the next scan. Removing a held coin prevents future entries in that
 coin but keeps daily exit checks until its position closes; it does not sell immediately.
+
+### Written strategy alignment
+
+Daily candles are cached beside the position state, fetched from the first available Binance candle, and updated incrementally. Wilder ATR no longer restarts from a moving 120-bar window. “History fetch page size” controls only API pagination, not the ATR calculation; changing it does not tune the strategy. Initial history loading can take longer; no late entry is forced if the grace window expires. Simultaneous entries are processed in configured coin-list order after exits, not network completion order. This deterministic cash-allocation convention is not an optimized ranking.
+
+The written 0.25% per-side cost is a backtest assumption. The agent records actual Testnet commissions, which can differ. A market order is submitted after confirming the daily close; exchange latency, lot rounding and actual fills prevent a guarantee of the exact historical next-open price. A confirmed channel exit is retained through partial fills or outages and retried by position synchronization; realized trade P&L is finalized only once the sellable remainder is closed.

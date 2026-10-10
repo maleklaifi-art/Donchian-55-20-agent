@@ -266,14 +266,14 @@ def test_universe_edits_round_trip_and_rename_symbols(tmp_path):
     assert reloaded.public_dict()["active_universe_symbols"] == ["BTCUSDT", "ETHUSDT"]
 
 
-def test_kill_switch_and_daily_loss_limit_block_only_new_entries(tmp_path):
+def test_only_manual_kill_switch_blocks_new_entries(tmp_path):
     cfg = BotConfig(kill_switch_file=str(tmp_path / "STOP"))
     logger = EventLogger(str(tmp_path / "events.jsonl"))
     state = {"open_positions": {}, "realized": [], "executed_entries": []}
     assert allowed_to_trade(state, cfg, logger)
 
     state["realized"] = [{"day": datetime.now(timezone.utc).date().isoformat(), "r": -3.0}]
-    assert not allowed_to_trade(state, cfg, logger)
+    assert allowed_to_trade(state, cfg, logger)
     state["realized"] = [{"day": "2020-01-01", "r": -3.0}]
     assert allowed_to_trade(state, cfg, logger)
 

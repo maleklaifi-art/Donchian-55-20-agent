@@ -60,13 +60,15 @@ class Exchange:
         self.free -= cost
         self.buys.append((symbol, cost))
         return {"orderId": len(self.buys), "executedQty": str(cost / self.fill_price),
-                "cummulativeQuoteQty": str(cost), "fills": []}
+                "cummulativeQuoteQty": str(cost), "fills": [{"qty": str(cost / self.fill_price),
+                "commission": "0", "commissionAsset": symbol[:-4]}]}
 
     def market_sell_qty(self, symbol, quantity, client_id):
         self.sells.append((symbol, quantity, client_id))
         return {"orderId": 900 + len(self.sells), "status": "FILLED",
                 "executedQty": quantity,
-                "cummulativeQuoteQty": str(float(quantity) * self.fill_price)}
+                "cummulativeQuoteQty": str(float(quantity) * self.fill_price),
+                "fills": [{"qty": quantity, "commission": "0", "commissionAsset": "USDT"}]}
 
 
 @pytest.fixture
@@ -99,7 +101,7 @@ def test_larger_atr_produces_a_smaller_position_with_the_same_risk(setup):
 
 
 @pytest.mark.parametrize("atr,legacy_cap,expected", [(1.0, 100, 90.0), (1.0, 25, 90.0),
-                                                     (10.0, 100, 9.0), (0.1, 100, 199.0)])
+                                                     (10.0, 100, 9.0), (0.1, 100, 200.0)])
 def test_legacy_caps_do_not_limit_risk_based_size(setup, tmp_path, atr, legacy_cap, expected):
     path = tmp_path / "legacy_caps.json"
     path.write_text('{"max_position_notional_usdt":' + str(legacy_cap) +
@@ -146,7 +148,7 @@ def test_large_unrealized_gain_cannot_be_spent_as_cash(setup):
     setup[1].best_ask.side_effect = lambda symbol: 1000 if symbol == "OLDUSDT" else 90
     exchange = Exchange(free=10_000)
     enter(signal(atr=.1), exchange, setup)
-    assert exchange.buys[0][1] == pytest.approx(9.95)
+    assert exchange.buys[0][1] == pytest.approx(10.0)
 
 
 @pytest.mark.parametrize("mark", [0, -1, float('nan'), float('inf'), RuntimeError('price unavailable')])
@@ -185,8 +187,8 @@ def test_multiple_positions_have_independent_risk_and_shared_cash_caps(setup):
     assert len(state["executed_entries"]) == 2
     assert load_state(cfg.state_file) == state
     enter(signal("CCCUSDT"), exchange, setup)
-    assert exchange.buys[-1][1] == pytest.approx(19.9)
-    assert sum(cost for _, cost in exchange.buys) < 200
+    assert exchange.buys[-1][1] == pytest.approx(20.0)
+    assert sum(cost for _, cost in exchange.buys) <= 200
 
 
 @pytest.mark.parametrize("symbol", sorted(EXCLUDED_SYMBOLS))
@@ -200,7 +202,7 @@ def test_excluded_signal_cannot_submit_or_touch_state(setup, symbol):
     assert setup[2] == before
 
 
-@pytest.mark.parametrize("free,open_cost,expected", [(10000, 190, 9.95), (7, 90, 6.965)])
+@pytest.mark.parametrize("free,open_cost,expected", [(10000, 190, 10.0), (7, 90, 7.0)])
 def test_new_order_uses_free_balance_and_remaining_demo_bankroll(setup, free, open_cost, expected):
     setup[2]["open_positions"]["OLDUSDT"] = {"entry_price": open_cost, "quantity": 1, "risk_usdt": 2}
     exchange = Exchange(free)
@@ -270,16 +272,16 @@ def test_legacy_config_cannot_reinstate_removed_strategy_knobs(setup, tmp_path):
     assert all(p["risk_usdt"] <= 2 for p in context[2]["open_positions"].values())
 
 
-def test_kill_switch_and_daily_loss_stop_still_apply(setup):
+def test_manual_pause_remains_but_daily_loss_does_not_block(setup):
     cfg, _, state, logger = setup
     state["realized"] = [{"day": today_utc(), "r": -3}]
-    assert not allowed_to_trade(state, cfg, logger)
+    assert allowed_to_trade(state, cfg, logger)
     state["realized"] = []
     Path(cfg.kill_switch_file).touch()
     assert not allowed_to_trade(state, cfg, logger)
 
 
-@pytest.mark.parametrize("pnl,open_cost,expected", [(10, 200, 9.95), (-10, 180, 9.95),
+@pytest.mark.parametrize("pnl,open_cost,expected", [(10, 200, 10.0), (-10, 180, 10.0),
                                                     (-210, 0, None)])
 def test_realized_pnl_changes_cash_available_for_next_entry(setup, pnl, open_cost, expected):
     setup[2]["realized"] = [{"pnl_usdt": pnl}]
@@ -310,7 +312,7 @@ def test_database_realized_total_is_used_for_cloud_order_budget(setup):
     with patch("demo_trader.time.time", return_value=NOW / 1000):
         place_signal(signal(), market, exchange, {"AAAUSDT": rule("AAAUSDT")}, state,
                      cfg, logger, realized_pnl_usdt=10)
-    assert exchange.buys[0][1] == pytest.approx(9.95)
+    assert exchange.buys[0][1] == pytest.approx(10.0)
 
 
 def position_state(symbol="AAAUSDT"):

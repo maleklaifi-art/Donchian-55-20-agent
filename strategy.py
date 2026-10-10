@@ -33,7 +33,7 @@ class DonchianConfig:
     atr_period: int = 20            # Wilder ATR on daily candles
     atr_multiplier: float = 2.0     # sizing distance = multiplier x ATR
     risk_pct: float = 1.0           # risk % of equity per trade
-    daily_history_bars: int = 120   # 1D klines requested from Binance
+    daily_history_bars: int = 120   # history fetch page size; ATR uses full history
     entry_grace_minutes: int = 15   # entries only within N minutes after 00:00 UTC
 
 

@@ -14,6 +14,7 @@ from typing import Dict, Optional
 from urllib.parse import parse_qs
 
 from database import TradeDatabase
+from execution_accounting import position_cost
 from demo_trader import (
     BotConfig,
     EventLogger,
@@ -62,7 +63,7 @@ class DashboardLogger(EventLogger):
                 sk = payload.get("signal_key")
                 if sk:
                     self.db.mark_signal(sk, "REJECTED", payload.get("reason"))
-            elif event == "POSITION_OPENED":
+            elif event in {"POSITION_OPENED", "POSITION_UPDATED"}:
                 self.db.open_trade(payload)
             elif event == "POSITION_CLOSED":
                 self.db.close_trade(payload)
@@ -80,7 +81,7 @@ class CloudDemoEngine:
         self.db = db
         self.settings_store = settings_store
         self.logger = DashboardLogger(cfg.event_log, db)
-        self.market = PublicMarketClient(cfg.request_timeout_s)
+        self.market = PublicMarketClient(cfg.request_timeout_s, Path(cfg.state_file).parent / "daily_klines")
         self.state_lock = threading.RLock()
         # Railway's ordinary container filesystem is replaced on redeploy.
         # A real mount is required before collecting new trade history there.
@@ -377,8 +378,9 @@ class CloudDemoEngine:
             except Exception:
                 stored = {}
             t["current_price"] = px
-            t["unrealized_pnl_usdt"] = (px - entry) * qty
-            t["unrealized_pct"] = ((px / entry) - 1.0) * 100.0 if entry > 0 and px > 0 else 0.0
+            cost = position_cost({**t, **stored})
+            t["unrealized_pnl_usdt"] = px * qty - cost
+            t["unrealized_pct"] = t["unrealized_pnl_usdt"] / cost * 100.0 if cost > 0 else 0.0
             # Donchian channels are carried in the trade payload, not columns.
             t["entry_channel"] = stored.get("entry_channel", t.get("entry_channel"))
             t["exit_channel"] = stored.get("exit_channel", t.get("exit_channel"))
@@ -388,7 +390,7 @@ class CloudDemoEngine:
             unrealized += t["unrealized_pnl_usdt"]
             open_risk += float(t.get("risk_usdt") or 0)
             open_value += px * qty
-            open_cost += entry * qty
+            open_cost += cost
         stats["unrealized_pnl_usdt"] = unrealized
         stats["total_pnl_usdt"] = stats["realized_pnl_usdt"] + unrealized
         stats["open_risk_usdt"] = open_risk
@@ -428,8 +430,10 @@ class CloudDemoEngine:
                 # Keep the response key for existing clients; null means uncapped.
                 "max_position_notional_usdt": None,
                 "equity_basis": "funded balance plus open P&L, bounded by Testnet backing",
-                "cash_reserve_pct": 0.5,
-                "daily_loss_limit_r": self.cfg.daily_loss_limit_r,
+                "cash_reserve_pct": 0.0,
+                "daily_loss_limit_r": None,
+                "atr_history": "continuous from listing",
+                "fee_accounting": "actual fees for new trades; legacy records unchanged",
                 "demo_equity_cap_usdt": self.cfg.demo_equity_cap_usdt,
                 "starting_capital_usdt": self.cfg.demo_equity_cap_usdt,
                 "entry_period": settings.entry_period,

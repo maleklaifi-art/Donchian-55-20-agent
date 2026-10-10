@@ -140,10 +140,10 @@ button,input,select{font:inherit}
       <div class="field"><label for="setExitPeriod">Exit channel (days)</label><input id="setExitPeriod" type="number" min="5" max="500"></div>
       <div class="field"><label for="setAtrPeriod">ATR period</label><input id="setAtrPeriod" type="number" min="2" max="200"></div>
       <div class="field"><label for="setAtrMult">ATR multiplier (sizing distance)</label><input id="setAtrMult" type="number" min="0.1" max="20" step="0.1"></div>
-      <div class="field"><label for="setHistory">Daily history bars</label><input id="setHistory" type="number" min="60" max="1000"></div>
+      <div class="field"><label for="setHistory">History fetch page size</label><input id="setHistory" type="number" min="60" max="1000"></div>
       <div class="field"><label for="setGrace">Entry grace (min after 00:00 UTC)</label><input id="setGrace" type="number" min="1" max="1440"></div>
       <div class="field"><label for="setWorkers">Concurrent workers</label><input id="setWorkers" type="number" min="1" max="100"></div>
-      <p>Sizing: qty = (risk % × equity) / (2 × ATR). Equity includes open P&amp;L. No fixed position-value cap; available cash limits purchases (0.5% cash reserve). Long-only spot, one position per symbol, no stop orders — positions close only when the daily close breaks the 20-day low. Daily loss limit −3R. Orders need available Testnet funds; recorded P&amp;L is before fees.</p>
+      <p>Sizing: qty = (risk % × equity) / (2 × ATR). Equity includes open P&amp;L. No fixed position-value cap; available cash limits purchases. Long-only spot, one position per symbol, no stop orders — positions close only when the daily close breaks the 20-day low. No daily loss cutoff. ATR uses continuous daily history. Orders need available Testnet funds; new trades include actual fees. Legacy records stay unchanged.</p>
 
       <div class="field"><label for="setUniverseName">List name</label><input id="setUniverseName" type="text" placeholder="Core 10"></div>
       <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Coins (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
@@ -301,7 +301,7 @@ button,input,select{font:inherit}
       ['Schedule','Daily at 00:00 UTC + '+num(r.entry_grace_minutes,0)+' min grace for entries; exits on every daily scan'],
       ['Strategy',`Donchian ${r.entry_period}/${r.exit_period} · ATR(${r.atr_period}) × ${r.atr_multiplier} · long-only spot · exit on daily close below the ${r.exit_period}-day low · no stop orders`],
       ['Universe',`${esc(s.active_universe)} · ${esc((s.active_universe_symbols||[]).join(', '))}`],
-      ['Risk',`${num(r.risk_per_trade_pct,2)}% of equity per trade · ${esc(r.sizing_rule)} · no fixed position-value cap · available cash only · daily loss limit −${num(r.daily_loss_limit_r,0)}R`],
+      ['Risk',`${num(r.risk_per_trade_pct,2)}% of equity per trade · ${esc(r.sizing_rule)} · no fixed position-value cap · available cash only · no daily loss cutoff`],
       ['Funded capital',`${num(r.starting_capital_usdt,2)} USDT`],
       ['Free Testnet funds',m.testnet_free_usdt==null?'—':`${num(m.testnet_free_usdt,2)} USDT`],
       ['Trade history storage',m.history_persistent?'Persistent':`<span class="warnc">${esc(m.storage_error || 'Local files; keep the data folder when updating.')}</span>`]
@@ -322,10 +322,10 @@ button,input,select{font:inherit}
     $('equity').textContent=s.estimated_demo_equity_usdt==null?'—':`${num(s.estimated_demo_equity_usdt,2)} USDT`;
     $('balance').textContent=`${num(s.demo_balance_usdt,2)} USDT`;
     $('capitalSummary').textContent=`Capital ${num(r.starting_capital_usdt,2)} · available demo cash ${num(s.available_demo_cash_usdt,2)}`;
-    $('freeUsdt').textContent='Demo balance + open P&L · before fees';
+    $('freeUsdt').textContent='Demo balance + open P&L · new trades include fees';
     setMoney('openPnl',s.unrealized_pnl_usdt); $('openCount').textContent=`${s.open_count} open positions`;
     setMoney('realizedPnl',s.realized_pnl_usdt); $('realizedR').textContent=`${num(s.realized_r,2)}R total`;
-    setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · stop at −${num(r.daily_loss_limit_r,0)}R`;
+    setMoney('todayPnl',s.today_pnl_usdt); $('todayR').textContent=`${num(s.today_r,2)}R today · no daily cutoff`;
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
     renderOpen(d.open_trades); renderClosed(d.closed_trades); renderEntrySignals(d.entry_signals||[]);
     renderExitSignals(d.exit_signals||[]); renderNoAction(d.no_action||[]);

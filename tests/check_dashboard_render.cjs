@@ -85,7 +85,7 @@ const settings = {starting_capital_usdt: 500, risk_per_trade_pct: 1, entry_perio
 context.render({
   meta: {execution_ready: true, new_entries_enabled: true, scan_in_progress: false},
   risk: {starting_capital_usdt: 500, risk_per_trade_pct: 1, sizing_rule: 'risk % of equity / (2 x ATR)',
-    max_position_notional_usdt: null, daily_loss_limit_r: 3, entry_period: 55, exit_period: 20,
+    max_position_notional_usdt: null, daily_loss_limit_r: null, entry_period: 55, exit_period: 20,
     atr_period: 20, atr_multiplier: 2, entry_grace_minutes: 15},
   stats: {demo_balance_usdt: 510, estimated_demo_equity_usdt: 520, available_demo_cash_usdt: 460,
     unrealized_pnl_usdt: 10, realized_pnl_usdt: 10, realized_r: 1, today_pnl_usdt: 0, today_r: 0,
@@ -102,7 +102,7 @@ for(const removed of ['setUniverseSelect','setUniverseNew','setUniverseSave','se
 assert.match(elements.get('setUniverseSymbols').value, /BTCUSDT, ETHUSDT/);
 assert.match(elements.get('strategyRule').textContent, /55\/20 Donchian · ATR\(20\) × 2 · risk 1% · Daily at 00:00 UTC/);
 assert.match(elements.get('capitalSummary').textContent, /available demo cash 460/);
-assert.match(elements.get('freeUsdt').textContent, /before fees/);
+assert.match(elements.get('freeUsdt').textContent, /new trades include fees/);
 assert.match(elements.get('engineBody').innerHTML, /no fixed position-value cap/);
 assert.doesNotMatch(elements.get('engineBody').innerHTML, /max 0 USDT|100 USDT\/position/);
 console.log('Donchian dashboard render, settings, universe and balance checks passed.');
