@@ -15,9 +15,8 @@ from urllib.parse import parse_qs
 
 from database import TradeDatabase
 from research_store import ResearchStore
-from research_engine import ResearchEngine, config_for, fingerprint
-from pattern_engine import PatternEngine
-from explorer_engine import ExplorerEngine
+from decision_tracker import DecisionTracker, config_for, fingerprint
+from runtime_settings import REMOVED_JOB_SETTINGS
 from execution_accounting import position_cost
 from demo_trader import (
     BotConfig,
@@ -82,7 +81,7 @@ class DashboardLogger(EventLogger):
         try:
             self.research_store.execution_event(event, payload)
         except Exception as exc:
-            print(json.dumps({"time": utc_now(), "event": "RESEARCH_AUDIT_ERROR", "error": str(exc)}), flush=True)
+            print(json.dumps({"time": utc_now(), "event": "DECISION_AUDIT_ERROR", "error": str(exc)}), flush=True)
 
 
 class CloudDemoEngine:
@@ -137,24 +136,8 @@ class CloudDemoEngine:
         self.started_at = utc_now()
         self.strategy_config = self._apply_settings(settings_store.get())
         self.research_store = self.logger.research_store
-        self.research = ResearchEngine(self.research_store, Path(cfg.state_file).parent / "daily_klines",
-                                       settings_store, self._promote_research)
-        self.patterns = None
-        self.pattern_init_error = None
-        try:
-            self.patterns = PatternEngine(Path(cfg.state_file).parent / "patterns.sqlite3",
-                Path(cfg.state_file).parent / "daily_klines", settings_store.get, lambda: self.scan_in_progress)
-        except Exception as exc:
-            self.pattern_init_error = str(exc)
-            self.logger.emit("PATTERN_INIT_ERROR", error=str(exc))
-        self.explorer = None
-        self.explorer_init_error = None
-        try:
-            self.explorer = ExplorerEngine(Path(cfg.state_file).parent / "explorer.sqlite3",
-                settings_store.get, lambda: self.scan_in_progress or self.research.busy or bool(self.patterns and self.patterns.busy))
-        except Exception as exc:
-            self.explorer_init_error = str(exc)
-            self.logger.emit("EXPLORER_INIT_ERROR", error=str(exc))
+        self.tracking = DecisionTracker(self.research_store, Path(cfg.state_file).parent / "daily_klines",
+                                        settings_store.get, lambda: self.scan_in_progress)
         self._configure_execution()
         with self.state_lock:
             existing = load_state(self.cfg.state_file)
@@ -192,11 +175,7 @@ class CloudDemoEngine:
             self.logger.emit("EXECUTION_INIT_ERROR", error=str(exc))
 
     def start(self):
-        self.research.start(self.stop_event)
-        if self.patterns:
-            self.patterns.start(self.stop_event)
-        if self.explorer:
-            self.explorer.start(self.stop_event)
+        self.tracking.start(self.stop_event)
         threading.Thread(target=self._monitor_loop, name="donchian-monitor", daemon=True).start()
         threading.Thread(target=self._scanner_loop, name="donchian-scanner", daemon=True).start()
 
@@ -254,33 +233,12 @@ class CloudDemoEngine:
             entry_grace_minutes=settings.entry_grace_minutes,
         )
 
-    def _promote_research(self, cycle):
-        # Candidate selection never receives an exchange client or settings writer.
-        with self.state_lock:
-            if self.scan_in_progress:
-                return None  # Try later; do not mix versions within a scan.
-            settings = self.settings_store.get()
-            if not settings.research_enabled or not settings.research_auto_adopt:
-                return None
-            p = cycle["payload"]
-            if config_for(settings) != p["base"] or settings.strategy_version != p["base_version"]:
-                return False
-            change = p["change"]
-            if change["key"] not in {"entry_period", "adx_threshold"}:
-                return False
-            if p.get("forward", {}).get("gates") is None or not all(p["forward"]["gates"].values()):
-                return False
-            value = self.settings_store.update({change["key"]: change["after"],
-                                                "strategy_version": p["candidate_version"]})
-            self.strategy_config = self._apply_settings(value)
-            self.logger.emit("RESEARCH_ADOPTED", cycle_id=cycle["id"], change=change,
-                             strategy_version=value.strategy_version)
-            return True
-
     def update_settings(self, raw: dict):
         # Serialize funding changes with order submission and exit accounting.
         with self.state_lock:
             raw = dict(raw)
+            if REMOVED_JOB_SETTINGS.intersection(raw):
+                raise ValueError("Learning and research controls have been removed; only demo trading is active.")
             raw.pop("strategy_version", None)
             before = self.settings_store.get()
             value = self.settings_store.update(raw)
@@ -324,8 +282,8 @@ class CloudDemoEngine:
                 self.research_store.record_decisions(snapshot, config_for(settings), self.execution_ready,
                                                      self.new_entries_enabled())
             except Exception as exc:
-                # Optional research logging must never prevent a held trade's exit.
-                self.logger.emit("RESEARCH_AUDIT_ERROR", error=str(exc))
+                # Decision logging must never prevent a held trade's exit.
+                self.logger.emit("DECISION_AUDIT_ERROR", error=str(exc))
             self._send_telegram_snapshot(settings, snapshot)
             if self.execution_ready and self.exec_client is not None:
                 self._execute_snapshot(snapshot)
@@ -336,11 +294,7 @@ class CloudDemoEngine:
         finally:
             with self.meta_lock:
                 self.scan_in_progress = False
-            self.research.wakeup.set()
-            if self.patterns:
-                self.patterns.wakeup.set()
-            if self.explorer:
-                self.explorer.wakeup.set()
+            self.tracking.wakeup.set()
 
     def _execute_snapshot(self, snapshot: dict):
         """Exits first (frees capital), then entries, all in one state batch."""
@@ -543,11 +497,7 @@ class CloudDemoEngine:
             "recent_events": self.db.recent_events(60),
             "scan": self.last_scan_snapshot,
             "settings": settings.public_dict(),
-            "research": self.research.snapshot(),
-            "patterns": self.patterns.snapshot() if self.patterns else {
-                "enabled": False, "status": {"stage": "ERROR", "message": self.pattern_init_error}},
-            "explorer": self.explorer.snapshot() if self.explorer else {
-                "enabled": False, "status": {"stage": "ERROR", "message": self.explorer_init_error}},
+            "tracking": self.tracking.snapshot(),
         }
 
 ROOT = Path(__file__).resolve().parent
@@ -693,38 +643,6 @@ class Handler(BaseHTTPRequestHandler):
                                    query.get("skipped", ["0"])[0] == "1"))
             except ValueError:
                 return self._json(400, {"error": "Invalid offset"})
-        if path == "/api/explorer/trial":
-            if not sess:
-                return self._json(401, {"error": "unauthorized"})
-            if not engine.explorer:
-                return self._json(503, {"error": "Explorer unavailable"})
-            try:
-                cid = int(parse_qs(self.path.partition("?")[2]).get("id", [0])[0])
-                trial = engine.explorer.store.trial(cid)
-                if trial:
-                    trial["payload"].pop("tree", None)
-                return self._json(200 if trial else 404, {"trial": trial})
-            except ValueError:
-                return self._json(400, {"error": "Invalid trial id"})
-        if path == "/api/patterns/forecasts":
-            if not sess:
-                return self._json(401, {"error": "unauthorized"})
-            if not engine.patterns:
-                return self._json(503, {"error": "Pattern research unavailable"})
-            try:
-                offset = max(0, int(parse_qs(self.path.partition("?")[2]).get("offset", [0])[0]))
-                return self._json(200, engine.patterns.store.forecasts(200, offset))
-            except ValueError:
-                return self._json(400, {"error": "Invalid offset"})
-        if path == "/api/research/cycle":
-            if not sess:
-                return self._json(401, {"error": "unauthorized"})
-            try:
-                cid = int(parse_qs(self.path.partition("?")[2]).get("id", [0])[0])
-                cycle = engine.research_store.cycle(cid)
-                return self._json(200 if cycle else 404, {"cycle": cycle})
-            except ValueError:
-                return self._json(400, {"error": "Invalid cycle id"})
         if path == "/api/status":
             if not sess:
                 return self._json(401, {"error": "unauthorized"})

@@ -180,7 +180,7 @@ def test_invalid_ai_proposal_cannot_escape_allowlist(monkeypatch):
         select_proposal(choices(small_config()),{})
 
 
-def test_upgrade_and_promote_never_alter_existing_position(tmp_path,monkeypatch):
+def test_upgrade_and_tracking_preserve_position_without_adoption(tmp_path,monkeypatch):
     monkeypatch.setenv('START_ENGINE','false');monkeypatch.setenv('AUTO_START_NEW_TRADES','false')
     monkeypatch.setenv('DATA_DIR',str(tmp_path));monkeypatch.delenv('BINANCE_TESTNET_API_KEY',raising=False)
     monkeypatch.delenv('BINANCE_TESTNET_API_SECRET',raising=False)
@@ -202,12 +202,15 @@ def test_upgrade_and_promote_never_alter_existing_position(tmp_path,monkeypatch)
     assert all(held[k]==v for k,v in old.items()) and held['exit_period']==27
     c=forward_cycle(engine.research_store,settings.get());c['payload']['forward']={'gates':{'all':True}}
     before=path.read_bytes()
-    assert engine._promote_research(c) is True
+    saved_settings=settings_path.read_bytes()
+    pending=engine.research_store.cycle(c['id'])
+    assert not hasattr(engine, '_promote_research')
+    assert not any(hasattr(engine, name) for name in ('research', 'patterns', 'explorer'))
+    engine.tracking.run_once(now_ms=80*DAY_MS)
     assert path.read_bytes()==before  # No order, quantity, price, or exit mutation.
-    assert settings.get().adx_threshold==20
-    engine.scan_in_progress=True
-    assert engine._promote_research(c) is None
-    engine.scan_in_progress=False
+    assert settings_path.read_bytes()==saved_settings
+    assert engine.research_store.cycle(c['id'])==pending
+    assert settings.get().adx_threshold==25
     # Held coin still uses 27-day exit, despite a new active 20-day exit.
     rows=bars(80);market=Mock();market.resolve_universe.return_value=['AAAUSDT'];market.klines.return_value=rows
     with patch('demo_trader.time.time',return_value=80*86400), patch('demo_trader.evaluate_donchian', wraps=evaluate_donchian) as evaluate:

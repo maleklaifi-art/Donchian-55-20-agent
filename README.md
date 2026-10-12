@@ -16,30 +16,18 @@ The agent does not use AI discretion to invent trades. It scans independently in
 - **No stop orders / no OCO.** Exits happen only through the daily 20-day-low channel exit (legacy positions opened with protective OCO orders are still reconciled by the exit monitor).
 - Long-only, spot, one open position per symbol, one entry per signal (exactly-once state).
 
-## Research dashboard
+## Decision tracking
 
-The dashboard now shows **Analyze → Propose → Test → Compare → Adopt or reject**,
-weekly reviews, forward validation gates, and all observed decisions including
-skipped coins and their subsequent gains and losses. Changes apply only to future
-entries; existing positions retain their original exit rules. See [RESEARCH.md](RESEARCH.md)
-for schedules, limitations, optional Claude configuration and adoption criteria.
+Only demo trading runs: the existing Donchian rules scan the configured 19-coin
+universe, execute eligible Testnet entries/exits, and record daily decisions.
+The dashboard retains skipped signals and their hypothetical 1/7/30-day outcomes
+and original channel-exit returns. A lightweight outcome worker uses the daily
+scanner's cached candles; it cannot place orders or change settings.
 
-## Pattern learning beyond Donchian
-
-The same section now includes a **1H / 4H / 1D strategy explorer** for all 19
-coins: 363 predeclared candidates, controlled one-factor improvements, matched
-parent backtests and new-data forward paper comparisons. It records failures,
-uses a fixed search budget, and never adopts strategies into execution. See
-[EXPLORER.md](EXPLORER.md) for the catalogue, timing, limits and scientific protocol.
-
-A separate **Pattern learning · beyond Donchian** section trains a small regression
-tree on price, volume, volatility and Bitcoin conditions across the 19 coins. It
-shows learned rules, chronological validation, dated seven-day forecasts and an
-independent paper portfolio compared with Donchian. Training repeats every 28 days;
-new forecasts are recorded daily before a future entry open. Failed tests and
-negative outcomes remain visible. This module never places Testnet orders or
-adopts a new execution strategy. See [PATTERN_LEARNING.md](PATTERN_LEARNING.md) for
-exact target timing, assumptions, limitations and storage details.
+Pattern learning, multi-timeframe exploration, and automatic research adoption
+have been removed from the running service and dashboard. Historical research
+files remain untouched for audit purposes. Existing settings, positions, pending
+orders, and trade history are preserved; open positions keep their existing rules.
 
 ## Risk management
 

@@ -31,27 +31,23 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
         assert request('GET', '/healthz')[0] == 200
         assert request('GET', '/api/status')[0] == 401
         assert request('GET', '/api/research/decisions')[0] == 401
-        assert request('GET', '/api/research/cycle?id=1')[0] == 401
-        assert request('GET', '/api/patterns/forecasts')[0] == 401
-        assert request('GET', '/api/explorer/trial?id=1')[0] == 401
+        assert request('GET', '/api/research/cycle?id=1')[0] == 404
+        assert request('GET', '/api/patterns/forecasts')[0] == 404
+        assert request('GET', '/api/explorer/trial?id=1')[0] == 404
         sid, rec = app.make_session()
         old_cookie = {'Cookie': 'nr7_session=' + sid}
         assert request('GET', '/api/status', headers=old_cookie)[0] == 401
         headers = {'Cookie': 'donchian_session=' + sid, 'Content-Type': 'application/json'}
-        assert request('GET', '/api/explorer/trial?id=bad', headers=headers)[0] == 400
-        assert request('GET', '/api/explorer/trial?id=999', headers=headers)[0] == 404
-        from explorer_strategies import catalogue
-        trial = app.engine.explorer.store.new_trial(catalogue()[0], 1, {'tree': {'private': True}})
-        code, text = request('GET', '/api/explorer/trial?id='+str(trial['id']), headers=headers)
-        assert code == 200 and 'tree' not in json.loads(text)['trial']['payload']
+        for url in ['/api/explorer/trial?id=1', '/api/patterns/forecasts', '/api/research/cycle?id=1']:
+            assert request('GET', url, headers=headers)[0] == 404
+        code, text = request('GET', '/api/status', headers=headers)
+        status = json.loads(text)
+        assert code == 200 and 'tracking' in status
+        assert not {'research', 'patterns', 'explorer'}.intersection(status)
+        assert not app.REMOVED_JOB_SETTINGS.intersection(status['settings'])
         assert request('GET', '/api/research/decisions?offset=bad', headers=headers)[0] == 400
         code, text = request('GET', '/api/research/decisions?symbol=BTCUSDT&skipped=1', headers=headers)
         assert code == 200 and json.loads(text) == {'total': 0, 'rows': []}
-        assert request('GET', '/api/research/cycle?id=999', headers=headers)[0] == 404
-        assert request('GET', '/api/patterns/forecasts?offset=bad', headers=headers)[0] == 400
-        code, text = request('GET', '/api/patterns/forecasts', headers=headers)
-        assert code == 200 and json.loads(text) == {'total': 0, 'rows': []}
-
         # Strategy settings: Donchian parameters round trip through the API.
         body = json.dumps(dict(risk_per_trade_pct=0.5, entry_period=60, exit_period=25,
                                atr_period=14, atr_multiplier=1.5, daily_history_bars=200,
@@ -59,14 +55,9 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
         assert request('POST', '/api/config', body, headers)[0] == 403
         headers['X-CSRF-Token'] = rec['csrf']
         version = app.settings_store.get().strategy_version
-        assert request('POST', '/api/config', '{"explorer_enabled": false}', headers)[0] == 200
-        assert app.settings_store.get().explorer_enabled is False
+        for key in app.REMOVED_JOB_SETTINGS:
+            assert request('POST', '/api/config', json.dumps({key: True}), headers)[0] == 400
         assert app.settings_store.get().strategy_version == version
-        assert request('POST', '/api/config', '{"explorer_enabled": "yes"}', headers)[0] == 400
-        assert request('POST', '/api/config', '{"pattern_enabled": false}', headers)[0] == 200
-        assert app.settings_store.get().pattern_enabled is False
-        assert app.settings_store.get().strategy_version == version
-        assert request('POST', '/api/config', '{"pattern_enabled": "yes"}', headers)[0] == 400
         code, text = request('POST', '/api/config', body, headers)
         assert code == 200
         value = json.loads(text)['settings']

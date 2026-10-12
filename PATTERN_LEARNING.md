@@ -1,3 +1,5 @@
+> **Archived:** This job is no longer started or exposed by the app. Existing stored records are retained. Only demo trading and decision/outcome tracking run.
+
 # Pattern learning — separate section, same agent
 
 The original daily-model experiment documented here continues unchanged. The same

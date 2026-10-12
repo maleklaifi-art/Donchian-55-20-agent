@@ -155,25 +155,12 @@ button,input,select{font:inherit}
   </section>
 
 
-  <section class="section" aria-labelledby="researchTitle">
-    <div class="section-head"><h2 id="researchTitle">Research &amp; improvement</h2><span id="researchMode" class="status-label">Waiting for data</span></div>
-    <div class="research-body">
-      <div id="researchSummary" class="research-summary"></div>
-      <p id="researchNotice" class="research-note"></p>
-      <div class="research-controls"><label for="researchCycle">Review history</label><select id="researchCycle"><option value="">No reviews yet</option></select></div>
-      <div id="cycleTrack" class="cycle-track" aria-label="Research cycle stages"></div>
-      <div id="researchHypothesis"></div>
-      <div id="researchEvidence" class="evidence-grid"></div>
-      <div id="researchGates" class="research-note"></div>
-      <div id="researchBaseline" class="research-note"></div>
-      <details><summary>Analysis and dated activity</summary><div id="researchAnalysis" class="research-note"></div><ol id="researchTimeline" class="research-timeline"></ol></details>
-      <p class="research-note">The original 55/20 + ADX25 version stays in a separate paper reference. Candidates use matched cash-constrained portfolios. Past history is diagnostic; adoption requires fresh forward evidence. Research can change one entry parameter; risk, exit rules and the coin list stay outside its permissions.</p>
-    </div>
-  </section>
+
 
   <section class="section" aria-labelledby="decisionsTitle">
     <div class="section-head"><h2 id="decisionsTitle">Decisions &amp; missed opportunities</h2><span id="decisionCount" class="meta">No recorded decisions</span></div>
     <div class="research-body">
+      <p id="trackingNotice" class="research-note"></p>
       <div class="research-controls">
         <label for="decisionSymbol">Coin</label><select id="decisionSymbol"><option value="">All 19 coins</option></select>
         <label><input id="decisionSkipped" type="checkbox"> Skipped entries only</label>
@@ -184,42 +171,7 @@ button,input,select{font:inherit}
     <div id="decisionsTable" class="table-wrap"></div>
   </section>
 
-  <section class="section" aria-labelledby="patternsTitle">
-    <div class="section-head"><div><h2 id="patternsTitle">Pattern learning · beyond Donchian</h2><p class="research-note">Multi-timeframe strategy experiments and trained models across the same 19 coins.</p></div><span id="patternMode" class="status-label">PAPER RESEARCH</span></div>
-    <div class="research-body">
-      <h3>Multi-timeframe strategy explorer <span id="explorerMode" class="status-label">WAITING</span></h3>
-      <div id="explorerSummary" class="research-summary"></div>
-      <p id="explorerNotice" class="research-note">Waiting for hourly history.</p>
-      <p class="research-note">Analyze data → register hypothesis → backtest → compare → reject or forward-test → retain for paper research. Discovery compares different strategy families. Controlled improvements change one factor and also compare with an unchanged parent on identical dates. No automatic trade adoption.</p>
-      <details><summary>Hourly history · all 19 coins</summary><div id="explorerData" class="table-wrap"></div></details>
-      <details><summary>Search scope and protection against overfitting</summary><div id="explorerSpec" class="research-note"></div></details>
-      <div class="research-controls"><label for="explorerTrial">Experiment evidence</label><select id="explorerTrial"><option>No registered trials yet</option></select><button id="explorerRefresh" class="btn secondary" type="button">Refresh evidence</button></div>
-      <p id="explorerHypothesis" class="research-note"></p>
-      <div id="explorerComparisons" class="evidence-grid"></div>
-      <div id="explorerGates" class="table-wrap"></div>
-      <details><summary>Chronological folds and learned rules</summary><div id="explorerFolds" class="table-wrap"></div><div id="explorerModel" class="table-wrap"></div></details>
-      <ol id="explorerTimeline" class="research-timeline"></ol>
-      <details><summary>Every attempted hypothesis, including failures</summary><div id="explorerRegistry" class="table-wrap"></div></details>
-      <hr>
-      <h3>Daily trained model · existing experiment</h3>
-      <div id="patternSummary" class="research-summary"></div>
-      <p id="patternNotice" class="research-note">Waiting for pattern research to start.</p>
-      <div class="research-controls"><label for="patternModel">Training history</label><select id="patternModel"><option>No trained models yet</option></select></div>
-      <div id="patternTraining" class="research-note"></div>
-      <div id="patternValidation" class="table-wrap"></div>
-      <div id="patternComparisons" class="evidence-grid"></div>
-      <details open><summary>Learned patterns</summary><p class="research-note">These rules were fitted from past data. Their average outcomes and positive shares describe training examples; they are not proven probabilities or guarantees.</p><div id="patternRules" class="table-wrap"></div></details>
-      <details><summary>Features and fixed experiment settings</summary><div id="patternSpec" class="research-note"></div></details>
-      <h3>Recorded forecasts</h3>
-      <p class="research-note">Every coin receives a forecast, including negative forecasts. Planned entry is the next day's open after recording; exit is seven days later. Outcomes appear after the exit day's candle is complete. No past forecasts are invented after downtime.</p>
-      <div class="research-controls"><span id="patternForecastCount" class="muted"></span><button id="patternPrev" class="btn secondary" type="button">Previous</button><button id="patternNext" class="btn secondary" type="button">Next</button></div>
-      <div id="patternForecasts" class="table-wrap"></div>
-      <h3>Fresh prediction scorecard</h3><div id="patternScorecard" class="table-wrap"></div>
-      <details><summary>Paper positions and recent exits</summary><div id="patternPositions" class="table-wrap"></div><div id="patternTrades" class="table-wrap"></div></details>
-      <details><summary>Training and observation activity</summary><ol id="patternActivity" class="research-timeline"></ol></details>
-      <p class="research-note">This module uses a separate simulated account and never places Testnet orders. Donchian remains the execution strategy. Paper results include fixed fees and slippage; daily bars do not model exchange depth, spread or lot rounding. Retraining is scheduled every 28 days, with no claim that the new model is better.</p>
-    </div>
-  </section>
+
 
   <section class="section">
     <div class="section-head"><h2>Engine status</h2><div id="scanMeta" class="meta">Loading…</div></div>
@@ -246,18 +198,9 @@ button,input,select{font:inherit}
       <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Coins (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
       <div class="list-note">Edit the name or add/remove coins, then SAVE SETTINGS. Removed coins with open positions stay monitored for exits.</div>
 
-      <div class="field check"><input id="setPatternEnabled" type="checkbox"><label for="setPatternEnabled">Pattern learning and paper forecasts enabled</label></div>
-      <div class="field check"><input id="setExplorerEnabled" type="checkbox"><label for="setExplorerEnabled">Multi-timeframe strategy explorer enabled (paper only)</label></div>
-      <div class="field check"><input id="setResearchEnabled" type="checkbox"><label for="setResearchEnabled">Automatic research enabled</label></div>
-      <div class="field check"><input id="setResearchAdopt" type="checkbox"><label for="setResearchAdopt">Automatically adopt qualified demo candidates</label></div>
-      <div class="field"><label for="setReviewDays">Review every (days)</label><input id="setReviewDays" type="number" min="1" max="30"></div>
-      <div class="field"><label for="setForwardDays">First forward checkpoint (days)</label><input id="setForwardDays" type="number" min="30" max="730"></div>
-      <div class="field"><label for="setMinTrades">Minimum closed trades per comparison</label><input id="setMinTrades" type="number" min="10" max="1000"></div>
-      <div class="field"><label for="setMinSymbols">Minimum coins with closed trades</label><input id="setMinSymbols" type="number" min="2" max="19"></div>
-      <div class="field"><label for="setResearchFee">Paper fee per side (basis points)</label><input id="setResearchFee" type="number" min="0" max="200" step="0.1"></div>
-      <div class="field"><label for="setResearchSlip">Paper slippage per side (basis points)</label><input id="setResearchSlip" type="number" min="0" max="200" step="0.1"></div>
-      <div class="field"><label for="setResearchMinNotional">Paper minimum order (USDT)</label><input id="setResearchMinNotional" type="number" min="0" max="1000" step="0.1"></div>
-      <p>Research defaults are operational screening rules, not a guarantee of statistical reliability. Checkpoints are fixed when a candidate is registered (first, 2× and 4× days). Editing research gates applies to future candidates. Editing strategy, capital, costs or coins invalidates a pending comparison. 1 basis point = 0.01%. Demo trade accounting continues to use actual exchange fills and fees.</p>
+      <div class="field"><label for="setResearchFee">Hypothetical fee per side (basis points)</label><input id="setResearchFee" type="number" min="0" max="200" step="0.1"></div>
+      <div class="field"><label for="setResearchSlip">Hypothetical slippage per side (basis points)</label><input id="setResearchSlip" type="number" min="0" max="200" step="0.1"></div>
+      <p>These costs apply only to skipped-signal hypothetical outcomes. 1 basis point = 0.01%. Demo trade accounting uses actual exchange fills and fees.</p>
       <div class="field check"><input id="setTelegramEnabled" type="checkbox"><label for="setTelegramEnabled">Telegram alerts enabled</label></div>
       <div class="field"><label for="setTelegramChat">Telegram chat ID</label><input id="setTelegramChat" type="text"></div>
       <div class="field"><label for="setTelegramToken">New Telegram bot token (blank keeps current)</label><input id="setTelegramToken" type="password" autocomplete="new-password"></div>
@@ -274,11 +217,6 @@ button,input,select{font:inherit}
   let settingsInitialized = false;
   let universeDraft = [];
   let activeUniverseName = '';
-  let selectedCycle = null;
-  let selectedPatternModel = null;
-  let patternForecastPage = null;
-  let patternForecastOffset = 0;
-  let selectedExplorerTrial=null, explorerEvidence=null, explorerEvidenceKey=null;
   let decisionPage = null;
   let decisionOffset = 0;
   const $ = id => document.getElementById(id);
@@ -376,17 +314,8 @@ button,input,select{font:inherit}
     universeDraft=JSON.parse(JSON.stringify(s.universes||[]));
     activeUniverseName=s.active_universe||'';
     loadUniverseInputs(activeUniverseName);
-    $('setPatternEnabled').checked=s.pattern_enabled !== false;
-    $('setExplorerEnabled').checked=s.explorer_enabled !== false;
-    $('setResearchEnabled').checked=s.research_enabled !== false;
-    $('setResearchAdopt').checked=s.research_auto_adopt !== false;
-    $('setReviewDays').value=s.research_review_days ?? 7;
-    $('setForwardDays').value=s.research_forward_days ?? 90;
-    $('setMinTrades').value=s.research_min_trades ?? 20;
-    $('setMinSymbols').value=s.research_min_symbols ?? 5;
     $('setResearchFee').value=s.research_fee_bps ?? 25;
     $('setResearchSlip').value=s.research_slippage_bps ?? 5;
-    $('setResearchMinNotional').value=s.research_min_notional ?? 5;
     $('setTelegramEnabled').checked=!!s.telegram_enabled;
     $('setTelegramChat').value=s.telegram_chat_id||'';
     $('setTelegramToken').placeholder=s.telegram_token_configured?'Configured — leave blank to keep':'Not configured';
@@ -441,38 +370,8 @@ button,input,select{font:inherit}
   }
 
 
-  function compareCard(title,c){
-    if(!c)return `<article class="evidence-card"><h3>${esc(title)}</h3><p class="research-note">Not evaluated yet.</p></article>`;
-    const a=c.active,b=c.candidate;
-    const metrics=[['Net return', 'return_pct',pct],['Net P&L (incl. open)', 'net_profit',money],['Max drawdown','max_drawdown_pct',pct],['Closed trades','closed_trades',v=>num(v,0)],['Open positions','open_positions',v=>num(v,0)],['Profit factor (closed)','profit_factor',v=>num(v,2)],['Win rate','win_rate',pct],['Average win (R)','avg_win_r',v=>num(v,2)],['Average loss (R)','avg_loss_r',v=>num(v,2)]];
-    return `<article class="evidence-card"><h3>${esc(title)}</h3><p class="research-note">${esc(c.label)}<br>${date(a.start_ms)} → ${date(a.end_ms)} (end exclusive)<br>Fees ${num(a.fee_bps,1)} bps + slippage ${num(a.slippage_bps,1)} bps per side</p><div class="table-wrap">${table([['Metric',r=>esc(r[0])],['Active',r=>r[2](a[r[1]])],['Candidate',r=>r[2](b[r[1]])]],metrics)}</div></article>`;
-  }
-  function renderResearch(r){
-    if(!r){$('researchNotice').textContent='Research data unavailable.';return}
-    $('researchMode').textContent=!r.enabled?'RESEARCH PAUSED':r.busy?'WORKING':'MONITORING';
-    $('researchSummary').innerHTML=`<span class="tag">Active: ${esc(r.active_version)}</span><span class="tag">Review every ${num(r.review_days,0)} days</span><span class="tag">${num(r.trial_count,0)} hypotheses tested</span><span class="tag">Auto-adopt: ${r.auto_adopt?'on':'paused'}</span><span class="tag">${esc(r.proposer)}</span>`;
-    $('researchNotice').textContent=r.notice+(r.data?` · Daily history ${r.data.available}/${r.data.required} coins`:'')+(r.next_review_ms?` · Next scheduled review: ${date(r.next_review_ms)}`:'');
-    const cycles=r.cycles||[];
-    if(!cycles.some(c=>String(c.id)===String(selectedCycle)))selectedCycle=cycles[0]?.id ?? null;
-    $('researchCycle').innerHTML=cycles.length?cycles.map(c=>`<option value="${Number(c.id)}"${String(c.id)===String(selectedCycle)?' selected':''}>#${Number(c.id)} · ${esc(c.status)} · ${esc(date(c.created_at))}</option>`).join(''):'<option>No reviews yet</option>';
-    const cycle=cycles.find(c=>String(c.id)===String(selectedCycle)),p=cycle?.payload||{},timeline=p.timeline||[];
-    const labels={analyze:'Analyze',propose:'Propose',test:'Test',compare:'Compare',decide:'Adopt or reject'};
-    $('cycleTrack').innerHTML=['analyze','propose','test','compare','decide'].map((key,i)=>{
-      const visited=timeline.some(t=>t.stage===key),current=cycle?.stage===key;
-      return `<div class="cycle-step ${current?'current':visited?'done':''}"><b>${i+1}. ${labels[key]}</b><small>${current?esc(cycle.status==='OBSERVING'?'Keep observing':cycle.status):visited?'Recorded':'Waiting'}</small></div>`;
-    }).join('');
-    $('researchHypothesis').innerHTML=cycle?`<p><strong>${esc(p.hypothesis||'Analysis in progress')}</strong></p><p class="research-note">${p.change?`${esc(p.change.key)}: ${num(p.change.before,2)} → ${num(p.change.after,2)} · `:''}${esc(p.proposer||'')}${p.forward_start_ms?`<br>Fresh comparison starts ${date(p.forward_start_ms)} · ${num(p.observed_days||0,0)} days observed · next checkpoint ${date(p.next_evaluation_ms||p.forward_start_ms+p.policy.forward_days*86400000)}`:''}</p>`:'<p class="research-note">The first review starts after complete history is available for all coins. No results are fabricated.</p>';
-    $('researchEvidence').innerHTML=compareCard('Historical diagnostics',p.historical)+compareCard('Forward validation',p.forward);
-    $('researchGates').innerHTML=p.forward?Object.entries(p.forward.gates||{}).map(([k,v])=>`<span class="${v?'gate-pass':'gate-fail'}">${esc(k)}: ${v?'PASS':'FAIL'}</span>`).join(' · ')+`<br>Paired daily-return lower bound: ${num(p.forward.paired_lower_bound,6)} · adjusted alpha: ${num(p.forward.alpha,6)}<br>${esc(p.forward.limitations||'')}`:'Forward evaluation waits for the predeclared checkpoint. Historical success does not trigger adoption.';
-    const ref=r.reference_result;
-    $('researchBaseline').textContent=r.reference?`Original paper reference: ${r.reference.version} · starts ${date(r.reference.start_ms)}${ref?` · net ${num(ref.return_pct,2)}% · drawdown ${num(ref.max_drawdown_pct,2)}% · ${ref.closed_trades} closed trades`: ' · waiting for completed forward candles'}. Candidate comparisons above use their own matched dates.`:'Original paper reference will be registered at research startup.';
-    const analysis=p.latest_analysis||p.analysis;
-    $('researchAnalysis').innerHTML=analysis?`<p>${esc(analysis.note||'')}</p>`+table([
-      ['Decision stage',g=>esc(g.stage)],['Recorded',g=>num(g.decisions,0)],['Matured 7d',g=>num(g.matured_7d,0)],
-      ['Positive 7d',g=>num(g.positive_7d,0)],['Average 7d net',g=>pct(g.avg_7d_net_pct)],
-      ['Matured channel exits',g=>num(g.matured_channel_exits,0)],['Average exit net',g=>pct(g.avg_channel_exit_net_pct)]
-    ],analysis.groups||[]):'No analysis yet.';
-    $('researchTimeline').innerHTML=timeline.map(t=>`<li><span class="meta">${esc(date(t.time))}</span> <b>${esc(labels[t.stage]||t.stage)}</b> — ${esc(t.message)}</li>`).join('');
+  function renderTracking(r={}){
+    $('trackingNotice').textContent=(r.notice||'Waiting for decision outcomes.')+(r.data?` · Daily history ${r.data.available}/${r.data.required} coins`:'');
     const list=state?.settings?.active_universe_symbols||[];
     const select=$('decisionSymbol'),chosen=select.value;
     select.innerHTML='<option value="">All coins</option>'+list.map(sym=>`<option value="${esc(sym)}"${sym===chosen?' selected':''}>${esc(sym)}</option>`).join('');
@@ -497,82 +396,6 @@ button,input,select{font:inherit}
     try{const res=await fetch('/api/research/decisions?'+q,{cache:'no-store'});if(!res.ok)throw new Error(`HTTP ${res.status}`);decisionPage=await res.json();renderDecisions(decisionPage)}catch(e){showError(e.message)}
   }
 
-  const patternFeatureLabels={return_1d_pct:'1-day return (%)',return_7d_pct:'7-day return (%)',return_28d_pct:'28-day return (%)',volatility_20d_pct:'20-day daily volatility (%)',range_pct:'Daily price range (%)',close_in_range:'Close position within range (0–1)',volume_ratio_20d:'Volume / prior 20-day average',distance_high_20d_pct:'Distance from prior 20-day high (%)',distance_mean_50d_pct:'Distance from 50-day mean (%)',btc_return_7d_pct:'Bitcoin 7-day return (%)',btc_return_28d_pct:'Bitcoin 28-day return (%)'};
-  function renderExplorer(e){
-    if(!e){$('explorerNotice').textContent='Explorer is unavailable.';return}
-    const spec=e.spec||{}, rows=e.trials||[];
-    $('explorerMode').textContent=!e.enabled?'PAUSED':e.busy?'WORKING':e.status?.stage||'WAITING';
-    $('explorerNotice').textContent=(e.status?.message||'Waiting for data.')+(e.error?' · '+e.error:'');
-    $('explorerSummary').innerHTML=`<span class="tag">1H · 4H · 1D</span><span class="tag">19 coins</span><span class="tag">${num(e.attempted,0)} / ${num(e.catalogue_size,0)} attempted</span><span class="tag">${num(e.recent_attempts,0)} / ${num(spec.weekly_budget,0)} tests per 7 days</span><span class="tag">${num(e.counts?.OBSERVING||0,0)} / ${num(spec.forward_slots,0)} forward slots</span><span class="tag">Paper only</span>`;
-    $('explorerData').innerHTML=table([['Coin',r=>esc(r.symbol)],['Complete hours',r=>num(r.bars,0)],['Required',r=>num(r.expected,0)],['Ready',r=>r.ready?'Yes':'Downloading / incomplete'],['Last hour',r=>date(r.latest_ms)],['Issue',r=>esc(e.data?.errors?.[r.symbol]||'')]],e.data?.coins||[]);
-    $('explorerSpec').innerHTML=`<p>Finite, fixed catalogue: ${num(e.catalogue_size,0)} candidates. Families: ${(e.families||[]).map(esc).join(', ')}. Filters: ${(e.filters||[]).map(esc).join(', ')}. This does not cover every trading strategy.</p><p>Three years of saved hourly history; complete UTC candles only. Higher-timeframe context: 1H → 4H, 4H → 1D, 1D → completed week. Parameter periods count bars in the strategy timeframe. Learned models have a seven-bar target. No interpolated prices.</p><p>Three chronological 90-day historical folds; model labels must mature before each fold. History is diagnostic. At most three frozen candidates enter fresh forward paper replay, with declared checks at 90, 180 and 360 days. Daily updates describe progress; they do not trigger early acceptance. Every failed or interrupted trial stays counted. A search-wide adjustment covers all 363 candidates, three looks and both controls.</p><p>Captured capital ${money(e.config?.capital)} · risk sizing ${num(e.config?.risk_pct,2)}% / (2 × ATR20), cash constrained · fee ${num(e.config?.cost?.fee==null?null:e.config.cost.fee*10000,1)} bps and slippage ${num(e.config?.cost?.slip==null?null:e.config.cost.slip*10000,1)} bps per side. These are hypothetical next-open fills. No leverage or stop orders. Drawdown is sampled at each strategy bar close, including intraday for 1H/4H, versus daily for Donchian.</p><p>Passing is only promising paper evidence. One-factor tests and statistical screens reduce false discoveries; they cannot guarantee no overfitting, profitability or generalization beyond these coins.</p>`;
-    if(!rows.some(t=>String(t.id)===String(selectedExplorerTrial))){selectedExplorerTrial=rows[0]?.id??null;explorerEvidence=null;explorerEvidenceKey=null}
-    $('explorerTrial').innerHTML=rows.length?rows.map(t=>`<option value="${Number(t.id)}"${String(t.id)===String(selectedExplorerTrial)?' selected':''}>#${Number(t.id)} · ${esc(t.candidate?.frame)} · ${esc(t.candidate?.label)} · ${esc(t.status)}</option>`).join(''):'<option>No registered trials yet</option>';
-    $('explorerRegistry').innerHTML=table([['ID',r=>`#${Number(r.id)}`],['Frame',r=>esc(r.candidate?.frame)],['Hypothesis',r=>esc(r.candidate?.label)],['Type',r=>esc(r.candidate?.kind)],['Status',r=>esc(r.status)],['Reason',r=>esc(r.last_event?.message||'')],['Forward days',r=>num(r.observed_days,0)],['Next check',r=>date(r.next_evaluation_ms)]],rows);
-    renderExplorerEvidence(explorerEvidence);
-    const t=rows.find(t=>String(t.id)===String(selectedExplorerTrial));
-    const key=t?JSON.stringify([t.id,t.status,t.last_event?.time_ms,t.observed_days]):null;
-    if(key && key!==explorerEvidenceKey){explorerEvidenceKey=key;loadExplorerTrial(t.id,key)}
-  }
-  function renderExplorerEvidence(t){
-    const p=t?.payload||{}, c=p.candidate||{}, h=p.historical, f=p.forward;
-    $('explorerHypothesis').textContent=t?`#${t.id} · ${c.kind} · ${c.hypothesis} `+(c.change?`Parent: ${c.parent_id}. Single change: ${c.change.factor}, ${c.change.before} → ${c.change.after}. All other settings, universe, capital, costs and comparison dates stay fixed.`:'Independent discovery experiment; no one-factor improvement claim.')+` Registered ${date(t.registered_ms)}. ${p.forward_start_ms?'Fresh paper starts '+date(p.forward_start_ms)+'. ':''}${p.next_evaluation_ms?'Next checkpoint '+date(p.next_evaluation_ms)+'.':''}`:'Backtests begin after complete hourly history is available. Select a trial to inspect its evidence.';
-    const card=(title,v,control,name)=>v?.candidate&&v[control]?compareCard(title,{active:v[control],candidate:v.candidate,label:v.label||'Same dates and costs; unchanged parent.'}).replace('<th>Active</th>',`<th>${esc(name)}</th>`):'';
-    $('explorerComparisons').innerHTML=card('Historical · Donchian control',h,'baseline','Daily Donchian 55/20 + ADX25')+card('Historical · single-change comparison',h,'parent','Unchanged parent')+card('Fresh forward · Donchian control',f,'baseline','Daily Donchian 55/20 + ADX25')+card('Fresh forward · single-change comparison',f,'parent','Unchanged parent');
-    const gates=[...Object.entries(h?.gates||{}).map(([gate,passed])=>({period:'Historical',gate,passed})),...Object.entries(f?.gates||{}).map(([gate,passed])=>({period:'Forward checkpoint',gate,passed}))];
-    $('explorerGates').innerHTML=table([['Period',r=>esc(r.period)],['Requirement',r=>esc(r.gate)],['Result',r=>r.passed?'<span class="good">PASS</span>':'<span class="bad">FAIL / INSUFFICIENT</span>']],gates)+(f?.adjusted_alpha!=null?`<p class="research-note">Adjusted alpha ${num(f.adjusted_alpha,8)} · paired lower bound vs Donchian ${num(f.paired_lower_bound,8)} · vs parent ${num(f.parent_paired_lower_bound,8)}. ${esc(f.statistical_note||'')}</p>`:'');
-    $('explorerFolds').innerHTML=table([['Test dates',r=>`${date(r.start_ms)} → ${date(r.end_ms)}`],['Candidate net',r=>pct(r.candidate?.return_pct)],['Donchian net',r=>pct(r.baseline?.return_pct)],['Parent net',r=>pct(r.parent?.return_pct)],['Training labels before',r=>date(r.last_training_label_ms)]],h?.folds||[]);
-    $('explorerModel').innerHTML=table([['Learned rule',r=>esc(r.id)],['Conditions',r=>esc((r.conditions||[]).map(a=>`${a.feature} ${a.op} ${num(a.value,3)}`).join('; ')||'All training examples')],['Training mean net',r=>pct(r.prediction_pct)],['Examples',r=>num(r.samples,0)]],p.model?.rules||[]);
-    $('explorerFolds').innerHTML+=`<p class="research-note">Double-cost historical net return: ${pct(h?.double_costs?.return_pct)}. Earlier forward checkpoints:</p>`+table([['Checkpoint',r=>date(r.candidate?.end_ms)],['Candidate net',r=>pct(r.candidate?.return_pct)],['Parent net',r=>pct(r.parent?.return_pct)],['Unmet requirements',r=>esc(Object.entries(r.gates||{}).filter(([,v])=>!v).map(([k])=>k).join(', ')||'All recorded gates passed')]],p.checkpoints||[]);
-    $('explorerTimeline').innerHTML=(p.timeline||[]).map(r=>`<li>${esc(date(r.time_ms))} · <b>${esc(r.status)}</b> — ${esc(r.message)}</li>`).join('');
-  }
-  async function loadExplorerTrial(id,key){
-    try{const r=await fetch('/api/explorer/trial?id='+Number(id),{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const body=await r.json();if(explorerEvidenceKey!==key)return;explorerEvidence=body.trial;renderExplorerEvidence(explorerEvidence)}
-    catch(e){if(explorerEvidenceKey===key){explorerEvidenceKey=null;$('explorerHypothesis').textContent='Could not load trial evidence: '+e.message}}
-  }
-  function patternComparison(title,c){
-    if(!c?.pattern||!c?.donchian)return `<article class="evidence-card"><h3>${esc(title)}</h3><p class="research-note">${esc(c?.notice||'Waiting for evaluation.')}</p></article>`;
-    return compareCard(title,{active:c.donchian,candidate:c.pattern,label:c.label||'Same dates, capital and costs; distinct strategy rules.'}).replace('<th>Active</th>','<th>Donchian 55/20 + ADX25</th>').replace('<th>Candidate</th>','<th>Pattern model</th>');
-  }
-  function renderPatterns(p){
-    if(!p){$('patternNotice').textContent='Pattern research is unavailable.';return}
-    $('patternMode').textContent=!p.enabled?'PAUSED':p.busy?'TRAINING / UPDATING':'PAPER RESEARCH';
-    $('patternNotice').textContent=(p.status?.message||'Waiting for data.')+(p.data?` · History ${p.data.available}/${p.data.required} coins`:'')+(p.error?` · ${p.error}`:'');
-    const models=p.models||[],config=p.config||{},spec=p.spec||{};
-    if(!models.some(m=>String(m.id)===String(selectedPatternModel)))selectedPatternModel=models[0]?.id??null;
-    const model=models.find(m=>String(m.id)===String(selectedPatternModel));
-    $('patternSummary').innerHTML=`<span class="tag">Model: regression tree</span><span class="tag">Current forecast model: ${models.length?'#'+Number(models[0].id):'waiting'}</span><span class="tag">All 19 coins · daily features</span><span class="tag">7-day target</span><span class="tag">No exchange orders</span><span class="tag">Next training: ${esc(date(p.next_training_ms))}</span>`;
-    $('patternModel').innerHTML=models.length?models.map(m=>`<option value="${Number(m.id)}"${String(m.id)===String(selectedPatternModel)?' selected':''}>Model #${Number(m.id)} · ${esc(date(m.created_ms))}</option>`).join(''):'<option>No trained models yet</option>';
-    $('patternTraining').textContent=model?`Model #${model.id} · ${num(model.training_rows,0)} training examples · feature history starts ${date(model.training_start_ms)} · latest training outcome available ${date(model.last_training_label_ms)}. ${model.verdict}`:'Training waits for at least 730 common labelled days after feature warmup. No predictions or results are fabricated.';
-    const val=model?.validation;
-    $('patternValidation').innerHTML=val?`<p class="research-note">${esc(val.label)}. Forecast error (RMSE): ${num(val.rmse_pct,2)} percentage points; simple mean-return predictor: ${num(val.mean_baseline_rmse_pct,2)}. ${val.beats_mean_baseline?'Lower error than mean baseline.':'Did not improve on the mean baseline.'} ${esc(val.note)}</p>`+table([
-      ['Validation period',r=>`${date(r.test_start_ms)} → ${date(r.test_end_ms)}`],['Train examples',r=>num(r.training_rows,0)],['Test days',r=>num(r.test_days,0)],['Forecast error (pp)',r=>num(r.rmse_pct,2)],['Mean baseline error (pp)',r=>num(r.mean_baseline_rmse_pct,2)],['Qualifying examples',r=>num(r.selected_rows,0)],['Their average net outcome',r=>pct(r.selected_avg_net_pct)]
-    ],val.folds||[]):'<div class="empty">No chronological validation yet.</div>';
-    $('patternComparisons').innerHTML=patternComparison('Historical validation replay',model?.historical)+patternComparison('Fresh forward paper performance',p.paper);
-    $('patternRules').innerHTML=table([
-      ['Pattern',r=>esc(r.id)],['Learned conditions',r=>`<div class="decision-note">${(r.conditions||[]).map(c=>`${esc(patternFeatureLabels[c.feature]||c.feature)} ${esc(c.op)} ${num(c.value,3)}`).join('<br>')||'All training examples'}</div>`],
-      ['Training examples',r=>num(r.samples,0)],['Distinct days',r=>num(r.days,0)],['Average net outcome',r=>pct(r.prediction_pct)],['Positive share (training)',r=>pct(r.positive_fraction*100)]
-    ],model?.rules||[]);
-    $('patternSpec').innerHTML=`<p>Frozen paper capital: ${money(config.capital)} · sizing: ${num(config.risk_pct,2)}% / (2 × ATR20), limited by cash · maximum ${num(spec.max_positions,0)} positions · entry only when forecast net return &gt; ${num(spec.entry_threshold_pct,2)}% · seven-day scheduled exit.</p><p>Per-side fee ${num(config.cost?.fee==null?null:config.cost.fee*10000,1)} bps; slippage ${num(config.cost?.slip==null?null:config.cost.slip*10000,1)} bps. These assumptions were captured at experiment creation. Editing Donchian settings does not rewrite this experiment.</p><p>Features: ${(p.features||[]).map(f=>esc(patternFeatureLabels[f]||f)).join('; ')}.</p><p>Maximum tree depth ${num(spec.max_depth,0)}; minimum leaf ${num(spec.min_leaf,0)} examples across ${num(spec.min_leaf_days,0)} days. All coins use the same chronological split dates; training labels finish before each test period. Previously inspected history is diagnostic, not untouched evidence.</p>`;
-    renderPatternForecasts(patternForecastPage||p.forecasts||{total:0,rows:[]});
-    $('patternScorecard').innerHTML=table([['Model',r=>`#${Number(r.model_id)}`],['Forecasts',r=>num(r.forecasts,0)],['Matured',r=>num(r.matured,0)],['Error (RMSE, pp)',r=>num(r.rmse_pct,2)],['Direction accuracy',r=>pct(r.direction_accuracy_pct)],['Mean actual net outcome',r=>pct(r.average_actual_pct)]],p.scorecard||[]);
-    $('patternPositions').innerHTML=table([['Paper coin',r=>esc(r.symbol)],['Model',r=>`#${Number(r.model_id)}`],['Entry',r=>date(r.entry_time_ms)],['Planned exit',r=>date(r.exit_ms)],['Quantity',r=>num(r.quantity,8)],['Cost',r=>money(r.cost)]],Object.entries(p.paper?.positions||{}).map(([symbol,v])=>({symbol,...v})));
-    $('patternTrades').innerHTML=table([['Closed paper coin',r=>esc(r.symbol)],['Model',r=>`#${Number(r.model_id)}`],['Entry',r=>date(r.entry_time_ms)],['Exit',r=>date(r.exit_time_ms)],['Net P&L',r=>money(r.pnl)],['R',r=>num(r.r,2)]],p.paper?.trades||[]);
-    $('patternActivity').innerHTML=(p.activity||[]).map(a=>`<li>${esc(date(a.time_ms))} · <b>${esc(a.stage)}</b> — ${esc(a.message)}</li>`).join('');
-  }
-  function renderPatternForecasts(page){
-    const rows=page.rows||[];
-    $('patternForecastCount').textContent=`${num(page.total,0)} forecasts · showing ${rows.length?patternForecastOffset+1:0}–${patternForecastOffset+rows.length}`;
-    $('patternPrev').disabled=patternForecastOffset===0;$('patternNext').disabled=patternForecastOffset+rows.length>=page.total;
-    $('patternForecasts').innerHTML=table([
-      ['Recorded',r=>date(r.issued_ms)],['Coin',r=>esc(r.symbol)],['Model / pattern',r=>`#${Number(r.model_id)} / ${esc(r.leaf_id)}`],['Forecast net return',r=>pct(r.prediction_pct)],['Paper candidate',r=>r.prediction_pct>1?'Eligible, subject to portfolio limits':'No entry'],['Planned entry',r=>date(r.entry_ms)],['Planned exit',r=>date(r.exit_ms)],['Actual net outcome',r=>r.outcome?pct(r.outcome.net_return_pct):'Pending'],['Prediction error (pp)',r=>num(r.outcome?.prediction_error_pct,2)]
-    ],rows);
-  }
-  async function loadPatternForecasts(offset=0){
-    patternForecastOffset=offset;
-    try{const response=await fetch('/api/patterns/forecasts?offset='+offset,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);patternForecastPage=await response.json();renderPatternForecasts(patternForecastPage)}catch(e){showError(e.message)}
-  }
-
   function render(d){
     state=d; const m=d.meta,s=d.stats,r=d.risk;
     $('strategyRule').textContent=ruleLine(d.settings);
@@ -591,7 +414,7 @@ button,input,select{font:inherit}
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
     renderOpen(d.open_trades); renderClosed(d.closed_trades); renderEntrySignals(d.entry_signals||[]);
     renderExitSignals(d.exit_signals||[]); renderNoAction(d.no_action||[]);
-    renderEngine(d); renderSettings(d.settings); renderResearch(d.research); renderPatterns(d.patterns); renderExplorer(d.explorer);
+    renderEngine(d); renderSettings(d.settings); renderTracking(d.tracking);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.storage_error || m.last_scan_error || m.last_position_sync_error) showError(m.storage_error || m.last_scan_error || m.last_position_sync_error); else showError('');
   }
@@ -617,17 +440,8 @@ button,input,select{font:inherit}
       daily_history_bars:Number($('setHistory').value),
       entry_grace_minutes:Number($('setGrace').value),
       scan_workers:Number($('setWorkers').value),
-      pattern_enabled:$('setPatternEnabled').checked,
-      explorer_enabled:$('setExplorerEnabled').checked,
-      research_enabled:$('setResearchEnabled').checked,
-      research_auto_adopt:$('setResearchAdopt').checked,
-      research_review_days:Number($('setReviewDays').value),
-      research_forward_days:Number($('setForwardDays').value),
-      research_min_trades:Number($('setMinTrades').value),
-      research_min_symbols:Number($('setMinSymbols').value),
       research_fee_bps:Number($('setResearchFee').value),
       research_slippage_bps:Number($('setResearchSlip').value),
-      research_min_notional:Number($('setResearchMinNotional').value),
       universes:universeDraft,
       active_universe:activeUniverseName,
       telegram_enabled:$('setTelegramEnabled').checked,
@@ -644,12 +458,6 @@ button,input,select{font:inherit}
   }
 
   $('startBtn').addEventListener('click',()=>action('/api/start'));
-  $('patternModel').addEventListener('change',()=>{selectedPatternModel=$('patternModel').value;renderPatterns(state?.patterns)});
-  $('explorerTrial').addEventListener('change',()=>{selectedExplorerTrial=$('explorerTrial').value;explorerEvidence=null;explorerEvidenceKey=null;renderExplorer(state?.explorer)});
-  $('explorerRefresh').addEventListener('click',()=>{explorerEvidenceKey=null;renderExplorer(state?.explorer)});
-  $('patternPrev').addEventListener('click',()=>loadPatternForecasts(Math.max(0,patternForecastOffset-200)));
-  $('patternNext').addEventListener('click',()=>loadPatternForecasts(patternForecastOffset+200));
-  $('researchCycle').addEventListener('change',()=>{selectedCycle=$('researchCycle').value;renderResearch(state?.research)});
   $('decisionSymbol').addEventListener('change',()=>loadDecisions(0));
   $('decisionSkipped').addEventListener('change',()=>loadDecisions(0));
   $('decisionPrev').addEventListener('click',()=>loadDecisions(Math.max(0,decisionOffset-200)));

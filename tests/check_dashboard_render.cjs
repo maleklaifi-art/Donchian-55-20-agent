@@ -152,64 +152,21 @@ context.fetch = async (url, options) => {
   console.log('Universe add/remove, rename, collision and direct-save checks passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
-// Research states and model-generated strings are rendered through the real UI.
-vm.runInContext('globalThis.renderResearchForTest=undefined', context);
-const researchSource=source.slice(0,source.indexOf("  $('startBtn').addEventListener")) +
- '\n globalThis.renderResearch=renderResearch; globalThis.renderDecisions=renderDecisions;\n})();';
-vm.runInContext(researchSource,context);
-context.renderResearch({enabled:true,auto_adopt:true,review_days:7,trial_count:0,cycles:[],decisions:{total:0,rows:[]}});
-assert.match(elements.get('cycleTrack').innerHTML,/Analyze/);
-assert.match(elements.get('cycleTrack').innerHTML,/Adopt or reject/);
-assert.match(elements.get('researchHypothesis').innerHTML,/No results are fabricated/);
-context.renderResearch({enabled:true,auto_adopt:true,review_days:7,trial_count:1,
- active_version:'v1',proposer:'Rule-based',notice:'Observing',cycles:[{id:1,status:'OBSERVING',stage:'decide',
- payload:{hypothesis:'<img src=x onerror=alert(1)>',analysis:{note:'All results',groups:[{stage:'ADX',decisions:19,matured_7d:10,positive_7d:4,avg_7d_net_pct:-2}]},
- timeline:[{stage:'analyze',message:'Collected'},{stage:'decide',message:'Observe'}]}}],decisions:{total:0,rows:[]}});
-assert.match(elements.get('cycleTrack').innerHTML,/Keep observing/);
-assert.doesNotMatch(elements.get('researchHypothesis').innerHTML,/<img/);
-assert.match(elements.get('researchHypothesis').innerHTML,/&lt;img/);
-assert.match(elements.get('researchAnalysis').innerHTML,/-2/);
-context.renderDecisions({total:1,rows:[{symbol:'AAAUSDT',action:'NO_ACTION',execution:'SKIPPED',reason:'ADX below threshold',payload:{adx:24,adx_threshold:25},outcomes:{'7':{return_pct:10}},strategy_version:'v1'}]});
+// Only decision tracking remains; verify empty/matured rows and safe text.
+vm.runInContext(source.slice(0,source.indexOf("  $('startBtn').addEventListener")) +
+ '\n globalThis.renderTracking=renderTracking; globalThis.renderDecisions=renderDecisions;\n})();',context);
+context.renderTracking();
+assert.match(elements.get('trackingNotice').textContent,/Waiting/);
+assert.match(elements.get('decisionsTable').innerHTML,/No records yet/);
+context.renderTracking({notice:'Tracking only',data:{available:19,required:19},decisions:{total:1,rows:[{
+ symbol:'AAAUSDT',action:'NO_ACTION',execution:'SKIPPED',reason:'ADX below threshold <script>bad</script>',
+ payload:{adx:24,adx_threshold:25},outcomes:{'7':{return_pct:10}},strategy_version:'v1'}]}});
+assert.match(elements.get('trackingNotice').textContent,/19\/19/);
 assert.match(elements.get('decisionsTable').innerHTML,/10.00%/);
 assert.match(elements.get('decisionsTable').innerHTML,/ADX below threshold/);
+assert.match(elements.get('decisionsTable').innerHTML,/&lt;script&gt;/);
+assert.doesNotMatch(elements.get('decisionsTable').innerHTML,/<script>/);
 assert.equal(elements.get('decisionNext').disabled,true);
-console.log('Research stages, missed opportunities, negative results, empty state and escaping checks passed.');
-
-// Independent pattern research remains readable for waiting and trained states.
-vm.runInContext(source.slice(0,source.indexOf("  $('startBtn').addEventListener")) +
- '\n globalThis.renderPatterns=renderPatterns;\n})();',context);
-context.renderPatterns({enabled:true,status:{stage:'WAITING_DATA',message:'Waiting for BTCUSDT history'},models:[],forecasts:{total:0,rows:[]}});
-assert.match(elements.get('patternNotice').textContent,/Waiting for BTCUSDT/);
-assert.match(elements.get('patternTraining').textContent,/730/);
-assert.match(elements.get('patternRules').innerHTML,/No records yet/);
-const metrics={return_pct:-8,net_profit:-16,max_drawdown_pct:14,closed_trades:67,open_positions:0,fee_bps:25,slippage_bps:5};
-context.renderPatterns({enabled:true,models:[{id:1,created_ms:1,training_rows:20000,verdict:'Diagnostic only',
- validation:{label:'Chronological test',rmse_pct:10,mean_baseline_rmse_pct:9,beats_mean_baseline:false,folds:[]},
- historical:{pattern:metrics,donchian:{...metrics,return_pct:6},label:'Past diagnostics'},
- rules:[{id:'root<script>',conditions:[{feature:'return_7d_pct',op:'<=',value:2}],samples:200,days:40,prediction_pct:-3,positive_fraction:.4}]}],
- forecasts:{total:1,rows:[{symbol:'BTCUSDT',model_id:1,leaf_id:'rootL',prediction_pct:2,outcome:null}]},scorecard:[],activity:[]});
-assert.match(elements.get('patternValidation').innerHTML,/Did not improve/);
-assert.match(elements.get('patternComparisons').innerHTML,/Donchian 55\/20 \+ ADX25/);
-assert.match(elements.get('patternComparisons').innerHTML,/-8.00%/);
-assert.doesNotMatch(elements.get('patternRules').innerHTML,/<script>/);
-assert.match(elements.get('patternRules').innerHTML,/&lt;script&gt;/);
-assert.match(elements.get('patternForecasts').innerHTML,/Pending/);
-assert.equal(elements.get('patternNext').disabled,true);
-console.log('Pattern training, failure evidence, paper comparison, pending forecasts and escaping checks passed.');
-
-// Explorer evidence: controls, single changes, failures, dates and escaping.
-vm.runInContext(source.slice(0, source.indexOf("  $('startBtn').addEventListener")) +
- '\n globalThis.renderExplorer=renderExplorer; globalThis.renderExplorerEvidence=renderExplorerEvidence;\n})();',context);
-context.renderExplorer({enabled:true,status:{stage:'DOWNLOADING',message:'History ready 0/19'},spec:{weekly_budget:12,forward_slots:3},catalogue_size:363,trials:[],attempted:0,recent_attempts:0});
-assert.match(elements.get('explorerNotice').textContent,/0\/19/);
-assert.match(elements.get('explorerSummary').innerHTML,/1H · 4H · 1D/);
-assert.match(elements.get('explorerSpec').innerHTML,/cannot guarantee/);
-context.renderExplorerEvidence({id:2,registered_ms:1,payload:{candidate:{kind:'CONTROLLED_CHANGE',hypothesis:'<script>bad</script>',parent_id:'1h:breakout:v1:none',change:{factor:'entry_bars',before:20,after:55}},
- historical:{candidate:metrics,baseline:{...metrics,return_pct:6},parent:{...metrics,return_pct:8},gates:{parent_net_return:false},folds:[]},
- timeline:[{time_ms:1,status:'REJECTED',message:'<script>bad</script>'}]}});
-assert.match(elements.get('explorerHypothesis').textContent,/Single change: entry_bars, 20 → 55/);
-assert.match(elements.get('explorerComparisons').innerHTML,/Unchanged parent/);
-assert.match(elements.get('explorerGates').innerHTML,/FAIL \/ INSUFFICIENT/);
-assert.doesNotMatch(elements.get('explorerTimeline').innerHTML,/<script>/);
-assert.match(elements.get('explorerTimeline').innerHTML,/&lt;script&gt;/);
-console.log('Explorer empty state, single-change controls, evidence, failure and escaping checks passed.');
+assert.doesNotMatch(html,/id="(?:patternsTitle|researchTitle|explorerMode|setResearchAdopt|setPatternEnabled|setExplorerEnabled)"/);
+assert.ok(!('pattern_enabled' in context.settingsPayload()));
+console.log('Decision outcomes, removed sections, empty state and escaping checks passed.');

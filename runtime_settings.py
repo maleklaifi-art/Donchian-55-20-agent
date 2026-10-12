@@ -12,6 +12,14 @@ from typing import Any, Dict, List
 from strategy import DEFAULT_UNIVERSE_SYMBOLS
 
 
+# Retain legacy values on disk for compatibility, but never expose or activate jobs.
+REMOVED_JOB_SETTINGS = frozenset({
+    "research_enabled", "research_auto_adopt", "pattern_enabled", "explorer_enabled",
+    "research_review_days", "research_forward_days", "research_min_trades",
+    "research_min_symbols", "research_min_notional",
+})
+
+
 def default_universes() -> List[Dict[str, Any]]:
     return [{"name": "Core 19", "symbols": list(DEFAULT_UNIVERSE_SYMBOLS)}]
 
@@ -51,6 +59,8 @@ class RuntimeSettings:
 
     def public_dict(self) -> dict:
         data = asdict(self)
+        for key in REMOVED_JOB_SETTINGS:
+            data.pop(key, None)
         data.pop("settings_revision", None)
         data.pop("legacy_position_exit_period", None)
         data["telegram_bot_token"] = ""

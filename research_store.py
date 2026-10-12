@@ -149,6 +149,10 @@ class ResearchStore:
             return {'groups':[dict(g) for g in groups],
                     'note':'All recorded decisions, including losses. Overlapping horizons are descriptive, not independent trades. Recent outcomes remain censored until mature.'}
 
+    def decision_symbols(self):
+        with self.db._connect() as c:
+            return [row[0] for row in c.execute('SELECT DISTINCT symbol FROM daily_decisions')]
+
     def update_outcomes(self, data, now_ms):
         """Measure *all* observed coins, not a hindsight-selected winners list.
 

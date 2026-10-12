@@ -1,3 +1,5 @@
+> **Archived:** This job is no longer started or exposed by the app. Existing stored records are retained. Only demo trading and decision/outcome tracking run.
+
 # Multi-timeframe strategy explorer
 
 The existing agent hosts an additional paper-research worker and a subsection of

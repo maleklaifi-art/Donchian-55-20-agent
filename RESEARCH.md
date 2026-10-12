@@ -1,3 +1,5 @@
+> **Archived:** This job is no longer started or exposed by the app. Existing stored records are retained. Only demo trading and decision/outcome tracking run.
+
 # Autonomous demo research
 
 The existing daily Testnet execution engine remains responsible for orders. A separate
