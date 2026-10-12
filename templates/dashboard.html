@@ -184,6 +184,28 @@ button,input,select{font:inherit}
     <div id="decisionsTable" class="table-wrap"></div>
   </section>
 
+  <section class="section" aria-labelledby="patternsTitle">
+    <div class="section-head"><div><h2 id="patternsTitle">Pattern learning · beyond Donchian</h2><p class="research-note">A trained model explores price, volume, volatility and Bitcoin conditions across the same 19 coins.</p></div><span id="patternMode" class="status-label">PAPER RESEARCH</span></div>
+    <div class="research-body">
+      <div id="patternSummary" class="research-summary"></div>
+      <p id="patternNotice" class="research-note">Waiting for pattern research to start.</p>
+      <div class="research-controls"><label for="patternModel">Training history</label><select id="patternModel"><option>No trained models yet</option></select></div>
+      <div id="patternTraining" class="research-note"></div>
+      <div id="patternValidation" class="table-wrap"></div>
+      <div id="patternComparisons" class="evidence-grid"></div>
+      <details open><summary>Learned patterns</summary><p class="research-note">These rules were fitted from past data. Their average outcomes and positive shares describe training examples; they are not proven probabilities or guarantees.</p><div id="patternRules" class="table-wrap"></div></details>
+      <details><summary>Features and fixed experiment settings</summary><div id="patternSpec" class="research-note"></div></details>
+      <h3>Recorded forecasts</h3>
+      <p class="research-note">Every coin receives a forecast, including negative forecasts. Planned entry is the next day's open after recording; exit is seven days later. Outcomes appear after the exit day's candle is complete. No past forecasts are invented after downtime.</p>
+      <div class="research-controls"><span id="patternForecastCount" class="muted"></span><button id="patternPrev" class="btn secondary" type="button">Previous</button><button id="patternNext" class="btn secondary" type="button">Next</button></div>
+      <div id="patternForecasts" class="table-wrap"></div>
+      <h3>Fresh prediction scorecard</h3><div id="patternScorecard" class="table-wrap"></div>
+      <details><summary>Paper positions and recent exits</summary><div id="patternPositions" class="table-wrap"></div><div id="patternTrades" class="table-wrap"></div></details>
+      <details><summary>Training and observation activity</summary><ol id="patternActivity" class="research-timeline"></ol></details>
+      <p class="research-note">This module uses a separate simulated account and never places Testnet orders. Donchian remains the execution strategy. Paper results include fixed fees and slippage; daily bars do not model exchange depth, spread or lot rounding. Retraining is scheduled every 28 days, with no claim that the new model is better.</p>
+    </div>
+  </section>
+
   <section class="section">
     <div class="section-head"><h2>Engine status</h2><div id="scanMeta" class="meta">Loading…</div></div>
     <div class="table-wrap"><table class="table"><tbody id="engineBody"></tbody></table></div>
@@ -209,6 +231,7 @@ button,input,select{font:inherit}
       <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Coins (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
       <div class="list-note">Edit the name or add/remove coins, then SAVE SETTINGS. Removed coins with open positions stay monitored for exits.</div>
 
+      <div class="field check"><input id="setPatternEnabled" type="checkbox"><label for="setPatternEnabled">Pattern learning and paper forecasts enabled</label></div>
       <div class="field check"><input id="setResearchEnabled" type="checkbox"><label for="setResearchEnabled">Automatic research enabled</label></div>
       <div class="field check"><input id="setResearchAdopt" type="checkbox"><label for="setResearchAdopt">Automatically adopt qualified demo candidates</label></div>
       <div class="field"><label for="setReviewDays">Review every (days)</label><input id="setReviewDays" type="number" min="1" max="30"></div>
@@ -236,6 +259,9 @@ button,input,select{font:inherit}
   let universeDraft = [];
   let activeUniverseName = '';
   let selectedCycle = null;
+  let selectedPatternModel = null;
+  let patternForecastPage = null;
+  let patternForecastOffset = 0;
   let decisionPage = null;
   let decisionOffset = 0;
   const $ = id => document.getElementById(id);
@@ -333,6 +359,7 @@ button,input,select{font:inherit}
     universeDraft=JSON.parse(JSON.stringify(s.universes||[]));
     activeUniverseName=s.active_universe||'';
     loadUniverseInputs(activeUniverseName);
+    $('setPatternEnabled').checked=s.pattern_enabled !== false;
     $('setResearchEnabled').checked=s.research_enabled !== false;
     $('setResearchAdopt').checked=s.research_auto_adopt !== false;
     $('setReviewDays').value=s.research_review_days ?? 7;
@@ -452,6 +479,50 @@ button,input,select{font:inherit}
     try{const res=await fetch('/api/research/decisions?'+q,{cache:'no-store'});if(!res.ok)throw new Error(`HTTP ${res.status}`);decisionPage=await res.json();renderDecisions(decisionPage)}catch(e){showError(e.message)}
   }
 
+  const patternFeatureLabels={return_1d_pct:'1-day return (%)',return_7d_pct:'7-day return (%)',return_28d_pct:'28-day return (%)',volatility_20d_pct:'20-day daily volatility (%)',range_pct:'Daily price range (%)',close_in_range:'Close position within range (0–1)',volume_ratio_20d:'Volume / prior 20-day average',distance_high_20d_pct:'Distance from prior 20-day high (%)',distance_mean_50d_pct:'Distance from 50-day mean (%)',btc_return_7d_pct:'Bitcoin 7-day return (%)',btc_return_28d_pct:'Bitcoin 28-day return (%)'};
+  function patternComparison(title,c){
+    if(!c?.pattern||!c?.donchian)return `<article class="evidence-card"><h3>${esc(title)}</h3><p class="research-note">${esc(c?.notice||'Waiting for evaluation.')}</p></article>`;
+    return compareCard(title,{active:c.donchian,candidate:c.pattern,label:c.label||'Same dates, capital and costs; distinct strategy rules.'}).replace('<th>Active</th>','<th>Donchian 55/20 + ADX25</th>').replace('<th>Candidate</th>','<th>Pattern model</th>');
+  }
+  function renderPatterns(p){
+    if(!p){$('patternNotice').textContent='Pattern research is unavailable.';return}
+    $('patternMode').textContent=!p.enabled?'PAUSED':p.busy?'TRAINING / UPDATING':'PAPER RESEARCH';
+    $('patternNotice').textContent=(p.status?.message||'Waiting for data.')+(p.data?` · History ${p.data.available}/${p.data.required} coins`:'')+(p.error?` · ${p.error}`:'');
+    const models=p.models||[],config=p.config||{},spec=p.spec||{};
+    if(!models.some(m=>String(m.id)===String(selectedPatternModel)))selectedPatternModel=models[0]?.id??null;
+    const model=models.find(m=>String(m.id)===String(selectedPatternModel));
+    $('patternSummary').innerHTML=`<span class="tag">Model: regression tree</span><span class="tag">Current forecast model: ${models.length?'#'+Number(models[0].id):'waiting'}</span><span class="tag">All 19 coins · daily features</span><span class="tag">7-day target</span><span class="tag">No exchange orders</span><span class="tag">Next training: ${esc(date(p.next_training_ms))}</span>`;
+    $('patternModel').innerHTML=models.length?models.map(m=>`<option value="${Number(m.id)}"${String(m.id)===String(selectedPatternModel)?' selected':''}>Model #${Number(m.id)} · ${esc(date(m.created_ms))}</option>`).join(''):'<option>No trained models yet</option>';
+    $('patternTraining').textContent=model?`Model #${model.id} · ${num(model.training_rows,0)} training examples · feature history starts ${date(model.training_start_ms)} · latest training outcome available ${date(model.last_training_label_ms)}. ${model.verdict}`:'Training waits for at least 730 common labelled days after feature warmup. No predictions or results are fabricated.';
+    const val=model?.validation;
+    $('patternValidation').innerHTML=val?`<p class="research-note">${esc(val.label)}. Forecast error (RMSE): ${num(val.rmse_pct,2)} percentage points; simple mean-return predictor: ${num(val.mean_baseline_rmse_pct,2)}. ${val.beats_mean_baseline?'Lower error than mean baseline.':'Did not improve on the mean baseline.'} ${esc(val.note)}</p>`+table([
+      ['Validation period',r=>`${date(r.test_start_ms)} → ${date(r.test_end_ms)}`],['Train examples',r=>num(r.training_rows,0)],['Test days',r=>num(r.test_days,0)],['Forecast error (pp)',r=>num(r.rmse_pct,2)],['Mean baseline error (pp)',r=>num(r.mean_baseline_rmse_pct,2)],['Qualifying examples',r=>num(r.selected_rows,0)],['Their average net outcome',r=>pct(r.selected_avg_net_pct)]
+    ],val.folds||[]):'<div class="empty">No chronological validation yet.</div>';
+    $('patternComparisons').innerHTML=patternComparison('Historical validation replay',model?.historical)+patternComparison('Fresh forward paper performance',p.paper);
+    $('patternRules').innerHTML=table([
+      ['Pattern',r=>esc(r.id)],['Learned conditions',r=>`<div class="decision-note">${(r.conditions||[]).map(c=>`${esc(patternFeatureLabels[c.feature]||c.feature)} ${esc(c.op)} ${num(c.value,3)}`).join('<br>')||'All training examples'}</div>`],
+      ['Training examples',r=>num(r.samples,0)],['Distinct days',r=>num(r.days,0)],['Average net outcome',r=>pct(r.prediction_pct)],['Positive share (training)',r=>pct(r.positive_fraction*100)]
+    ],model?.rules||[]);
+    $('patternSpec').innerHTML=`<p>Frozen paper capital: ${money(config.capital)} · sizing: ${num(config.risk_pct,2)}% / (2 × ATR20), limited by cash · maximum ${num(spec.max_positions,0)} positions · entry only when forecast net return &gt; ${num(spec.entry_threshold_pct,2)}% · seven-day scheduled exit.</p><p>Per-side fee ${num(config.cost?.fee==null?null:config.cost.fee*10000,1)} bps; slippage ${num(config.cost?.slip==null?null:config.cost.slip*10000,1)} bps. These assumptions were captured at experiment creation. Editing Donchian settings does not rewrite this experiment.</p><p>Features: ${(p.features||[]).map(f=>esc(patternFeatureLabels[f]||f)).join('; ')}.</p><p>Maximum tree depth ${num(spec.max_depth,0)}; minimum leaf ${num(spec.min_leaf,0)} examples across ${num(spec.min_leaf_days,0)} days. All coins use the same chronological split dates; training labels finish before each test period. Previously inspected history is diagnostic, not untouched evidence.</p>`;
+    renderPatternForecasts(patternForecastPage||p.forecasts||{total:0,rows:[]});
+    $('patternScorecard').innerHTML=table([['Model',r=>`#${Number(r.model_id)}`],['Forecasts',r=>num(r.forecasts,0)],['Matured',r=>num(r.matured,0)],['Error (RMSE, pp)',r=>num(r.rmse_pct,2)],['Direction accuracy',r=>pct(r.direction_accuracy_pct)],['Mean actual net outcome',r=>pct(r.average_actual_pct)]],p.scorecard||[]);
+    $('patternPositions').innerHTML=table([['Paper coin',r=>esc(r.symbol)],['Model',r=>`#${Number(r.model_id)}`],['Entry',r=>date(r.entry_time_ms)],['Planned exit',r=>date(r.exit_ms)],['Quantity',r=>num(r.quantity,8)],['Cost',r=>money(r.cost)]],Object.entries(p.paper?.positions||{}).map(([symbol,v])=>({symbol,...v})));
+    $('patternTrades').innerHTML=table([['Closed paper coin',r=>esc(r.symbol)],['Model',r=>`#${Number(r.model_id)}`],['Entry',r=>date(r.entry_time_ms)],['Exit',r=>date(r.exit_time_ms)],['Net P&L',r=>money(r.pnl)],['R',r=>num(r.r,2)]],p.paper?.trades||[]);
+    $('patternActivity').innerHTML=(p.activity||[]).map(a=>`<li>${esc(date(a.time_ms))} · <b>${esc(a.stage)}</b> — ${esc(a.message)}</li>`).join('');
+  }
+  function renderPatternForecasts(page){
+    const rows=page.rows||[];
+    $('patternForecastCount').textContent=`${num(page.total,0)} forecasts · showing ${rows.length?patternForecastOffset+1:0}–${patternForecastOffset+rows.length}`;
+    $('patternPrev').disabled=patternForecastOffset===0;$('patternNext').disabled=patternForecastOffset+rows.length>=page.total;
+    $('patternForecasts').innerHTML=table([
+      ['Recorded',r=>date(r.issued_ms)],['Coin',r=>esc(r.symbol)],['Model / pattern',r=>`#${Number(r.model_id)} / ${esc(r.leaf_id)}`],['Forecast net return',r=>pct(r.prediction_pct)],['Paper candidate',r=>r.prediction_pct>1?'Eligible, subject to portfolio limits':'No entry'],['Planned entry',r=>date(r.entry_ms)],['Planned exit',r=>date(r.exit_ms)],['Actual net outcome',r=>r.outcome?pct(r.outcome.net_return_pct):'Pending'],['Prediction error (pp)',r=>num(r.outcome?.prediction_error_pct,2)]
+    ],rows);
+  }
+  async function loadPatternForecasts(offset=0){
+    patternForecastOffset=offset;
+    try{const response=await fetch('/api/patterns/forecasts?offset='+offset,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);patternForecastPage=await response.json();renderPatternForecasts(patternForecastPage)}catch(e){showError(e.message)}
+  }
+
   function render(d){
     state=d; const m=d.meta,s=d.stats,r=d.risk;
     $('strategyRule').textContent=ruleLine(d.settings);
@@ -470,7 +541,7 @@ button,input,select{font:inherit}
     $('winRate').textContent=s.win_rate==null?'—':pct(s.win_rate); $('winLoss').textContent=`${s.wins}W / ${s.losses}L`;
     renderOpen(d.open_trades); renderClosed(d.closed_trades); renderEntrySignals(d.entry_signals||[]);
     renderExitSignals(d.exit_signals||[]); renderNoAction(d.no_action||[]);
-    renderEngine(d); renderSettings(d.settings); renderResearch(d.research);
+    renderEngine(d); renderSettings(d.settings); renderResearch(d.research); renderPatterns(d.patterns);
     $('updated').textContent=`Updated ${new Date().toLocaleTimeString()}`;
     if(m.storage_error || m.last_scan_error || m.last_position_sync_error) showError(m.storage_error || m.last_scan_error || m.last_position_sync_error); else showError('');
   }
@@ -496,6 +567,7 @@ button,input,select{font:inherit}
       daily_history_bars:Number($('setHistory').value),
       entry_grace_minutes:Number($('setGrace').value),
       scan_workers:Number($('setWorkers').value),
+      pattern_enabled:$('setPatternEnabled').checked,
       research_enabled:$('setResearchEnabled').checked,
       research_auto_adopt:$('setResearchAdopt').checked,
       research_review_days:Number($('setReviewDays').value),
@@ -521,6 +593,9 @@ button,input,select{font:inherit}
   }
 
   $('startBtn').addEventListener('click',()=>action('/api/start'));
+  $('patternModel').addEventListener('change',()=>{selectedPatternModel=$('patternModel').value;renderPatterns(state?.patterns)});
+  $('patternPrev').addEventListener('click',()=>loadPatternForecasts(Math.max(0,patternForecastOffset-200)));
+  $('patternNext').addEventListener('click',()=>loadPatternForecasts(patternForecastOffset+200));
   $('researchCycle').addEventListener('change',()=>{selectedCycle=$('researchCycle').value;renderResearch(state?.research)});
   $('decisionSymbol').addEventListener('change',()=>loadDecisions(0));
   $('decisionSkipped').addEventListener('change',()=>loadDecisions(0));

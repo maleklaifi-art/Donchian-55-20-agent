@@ -24,6 +24,17 @@ skipped coins and their subsequent gains and losses. Changes apply only to futur
 entries; existing positions retain their original exit rules. See [RESEARCH.md](RESEARCH.md)
 for schedules, limitations, optional Claude configuration and adoption criteria.
 
+## Pattern learning beyond Donchian
+
+A separate **Pattern learning · beyond Donchian** section trains a small regression
+tree on price, volume, volatility and Bitcoin conditions across the 19 coins. It
+shows learned rules, chronological validation, dated seven-day forecasts and an
+independent paper portfolio compared with Donchian. Training repeats every 28 days;
+new forecasts are recorded daily before a future entry open. Failed tests and
+negative outcomes remain visible. This module never places Testnet orders or
+adopts a new execution strategy. See [PATTERN_LEARNING.md](PATTERN_LEARNING.md) for
+exact target timing, assumptions, limitations and storage details.
+
 ## Risk management
 
 - Funded demo capital defaults to **$200 USDT** and is editable in the dashboard. Balance = funded capital + recorded realized P&L; equity also includes open P&L.

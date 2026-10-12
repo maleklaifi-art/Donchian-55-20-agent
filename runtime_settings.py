@@ -25,6 +25,7 @@ class RuntimeSettings:
     legacy_position_exit_period: int = 20
     research_enabled: bool = True
     research_auto_adopt: bool = True
+    pattern_enabled: bool = True
     research_review_days: int = 7
     research_forward_days: int = 90
     research_min_trades: int = 20
@@ -151,7 +152,7 @@ class SettingsStore:
         value = RuntimeSettings(**asdict(old))
         value.adx_period = self._number(raw, "adx_period", value.adx_period, 2, 100, True)
         value.adx_threshold = self._number(raw, "adx_threshold", value.adx_threshold, 0, 100)
-        for key in ("research_enabled", "research_auto_adopt"):
+        for key in ("research_enabled", "research_auto_adopt", "pattern_enabled"):
             if key in raw:
                 if not isinstance(raw[key], bool):
                     raise ValueError(f"{key} must be boolean")

@@ -174,3 +174,25 @@ assert.match(elements.get('decisionsTable').innerHTML,/10.00%/);
 assert.match(elements.get('decisionsTable').innerHTML,/ADX below threshold/);
 assert.equal(elements.get('decisionNext').disabled,true);
 console.log('Research stages, missed opportunities, negative results, empty state and escaping checks passed.');
+
+// Independent pattern research remains readable for waiting and trained states.
+vm.runInContext(source.slice(0,source.indexOf("  $('startBtn').addEventListener")) +
+ '\n globalThis.renderPatterns=renderPatterns;\n})();',context);
+context.renderPatterns({enabled:true,status:{stage:'WAITING_DATA',message:'Waiting for BTCUSDT history'},models:[],forecasts:{total:0,rows:[]}});
+assert.match(elements.get('patternNotice').textContent,/Waiting for BTCUSDT/);
+assert.match(elements.get('patternTraining').textContent,/730/);
+assert.match(elements.get('patternRules').innerHTML,/No records yet/);
+const metrics={return_pct:-8,net_profit:-16,max_drawdown_pct:14,closed_trades:67,open_positions:0,fee_bps:25,slippage_bps:5};
+context.renderPatterns({enabled:true,models:[{id:1,created_ms:1,training_rows:20000,verdict:'Diagnostic only',
+ validation:{label:'Chronological test',rmse_pct:10,mean_baseline_rmse_pct:9,beats_mean_baseline:false,folds:[]},
+ historical:{pattern:metrics,donchian:{...metrics,return_pct:6},label:'Past diagnostics'},
+ rules:[{id:'root<script>',conditions:[{feature:'return_7d_pct',op:'<=',value:2}],samples:200,days:40,prediction_pct:-3,positive_fraction:.4}]}],
+ forecasts:{total:1,rows:[{symbol:'BTCUSDT',model_id:1,leaf_id:'rootL',prediction_pct:2,outcome:null}]},scorecard:[],activity:[]});
+assert.match(elements.get('patternValidation').innerHTML,/Did not improve/);
+assert.match(elements.get('patternComparisons').innerHTML,/Donchian 55\/20 \+ ADX25/);
+assert.match(elements.get('patternComparisons').innerHTML,/-8.00%/);
+assert.doesNotMatch(elements.get('patternRules').innerHTML,/<script>/);
+assert.match(elements.get('patternRules').innerHTML,/&lt;script&gt;/);
+assert.match(elements.get('patternForecasts').innerHTML,/Pending/);
+assert.equal(elements.get('patternNext').disabled,true);
+console.log('Pattern training, failure evidence, paper comparison, pending forecasts and escaping checks passed.');

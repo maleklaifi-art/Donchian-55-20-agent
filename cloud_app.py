@@ -16,6 +16,7 @@ from urllib.parse import parse_qs
 from database import TradeDatabase
 from research_store import ResearchStore
 from research_engine import ResearchEngine, config_for, fingerprint
+from pattern_engine import PatternEngine
 from execution_accounting import position_cost
 from demo_trader import (
     BotConfig,
@@ -137,6 +138,14 @@ class CloudDemoEngine:
         self.research_store = self.logger.research_store
         self.research = ResearchEngine(self.research_store, Path(cfg.state_file).parent / "daily_klines",
                                        settings_store, self._promote_research)
+        self.patterns = None
+        self.pattern_init_error = None
+        try:
+            self.patterns = PatternEngine(Path(cfg.state_file).parent / "patterns.sqlite3",
+                Path(cfg.state_file).parent / "daily_klines", settings_store.get, lambda: self.scan_in_progress)
+        except Exception as exc:
+            self.pattern_init_error = str(exc)
+            self.logger.emit("PATTERN_INIT_ERROR", error=str(exc))
         self._configure_execution()
         with self.state_lock:
             existing = load_state(self.cfg.state_file)
@@ -175,6 +184,8 @@ class CloudDemoEngine:
 
     def start(self):
         self.research.start(self.stop_event)
+        if self.patterns:
+            self.patterns.start(self.stop_event)
         threading.Thread(target=self._monitor_loop, name="donchian-monitor", daemon=True).start()
         threading.Thread(target=self._scanner_loop, name="donchian-scanner", daemon=True).start()
 
@@ -315,6 +326,8 @@ class CloudDemoEngine:
             with self.meta_lock:
                 self.scan_in_progress = False
             self.research.wakeup.set()
+            if self.patterns:
+                self.patterns.wakeup.set()
 
     def _execute_snapshot(self, snapshot: dict):
         """Exits first (frees capital), then entries, all in one state batch."""
@@ -518,6 +531,8 @@ class CloudDemoEngine:
             "scan": self.last_scan_snapshot,
             "settings": settings.public_dict(),
             "research": self.research.snapshot(),
+            "patterns": self.patterns.snapshot() if self.patterns else {
+                "enabled": False, "status": {"stage": "ERROR", "message": self.pattern_init_error}},
         }
 
 ROOT = Path(__file__).resolve().parent
@@ -661,6 +676,16 @@ class Handler(BaseHTTPRequestHandler):
                 symbol = str(query.get("symbol", [""])[0]).upper() or None
                 return self._json(200, engine.research_store.decisions(200, offset, symbol,
                                    query.get("skipped", ["0"])[0] == "1"))
+            except ValueError:
+                return self._json(400, {"error": "Invalid offset"})
+        if path == "/api/patterns/forecasts":
+            if not sess:
+                return self._json(401, {"error": "unauthorized"})
+            if not engine.patterns:
+                return self._json(503, {"error": "Pattern research unavailable"})
+            try:
+                offset = max(0, int(parse_qs(self.path.partition("?")[2]).get("offset", [0])[0]))
+                return self._json(200, engine.patterns.store.forecasts(200, offset))
             except ValueError:
                 return self._json(400, {"error": "Invalid offset"})
         if path == "/api/research/cycle":
