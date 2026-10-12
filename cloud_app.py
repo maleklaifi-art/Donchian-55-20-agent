@@ -17,6 +17,7 @@ from database import TradeDatabase
 from research_store import ResearchStore
 from research_engine import ResearchEngine, config_for, fingerprint
 from pattern_engine import PatternEngine
+from explorer_engine import ExplorerEngine
 from execution_accounting import position_cost
 from demo_trader import (
     BotConfig,
@@ -146,6 +147,14 @@ class CloudDemoEngine:
         except Exception as exc:
             self.pattern_init_error = str(exc)
             self.logger.emit("PATTERN_INIT_ERROR", error=str(exc))
+        self.explorer = None
+        self.explorer_init_error = None
+        try:
+            self.explorer = ExplorerEngine(Path(cfg.state_file).parent / "explorer.sqlite3",
+                settings_store.get, lambda: self.scan_in_progress or self.research.busy or bool(self.patterns and self.patterns.busy))
+        except Exception as exc:
+            self.explorer_init_error = str(exc)
+            self.logger.emit("EXPLORER_INIT_ERROR", error=str(exc))
         self._configure_execution()
         with self.state_lock:
             existing = load_state(self.cfg.state_file)
@@ -186,6 +195,8 @@ class CloudDemoEngine:
         self.research.start(self.stop_event)
         if self.patterns:
             self.patterns.start(self.stop_event)
+        if self.explorer:
+            self.explorer.start(self.stop_event)
         threading.Thread(target=self._monitor_loop, name="donchian-monitor", daemon=True).start()
         threading.Thread(target=self._scanner_loop, name="donchian-scanner", daemon=True).start()
 
@@ -328,6 +339,8 @@ class CloudDemoEngine:
             self.research.wakeup.set()
             if self.patterns:
                 self.patterns.wakeup.set()
+            if self.explorer:
+                self.explorer.wakeup.set()
 
     def _execute_snapshot(self, snapshot: dict):
         """Exits first (frees capital), then entries, all in one state batch."""
@@ -533,6 +546,8 @@ class CloudDemoEngine:
             "research": self.research.snapshot(),
             "patterns": self.patterns.snapshot() if self.patterns else {
                 "enabled": False, "status": {"stage": "ERROR", "message": self.pattern_init_error}},
+            "explorer": self.explorer.snapshot() if self.explorer else {
+                "enabled": False, "status": {"stage": "ERROR", "message": self.explorer_init_error}},
         }
 
 ROOT = Path(__file__).resolve().parent
@@ -678,6 +693,19 @@ class Handler(BaseHTTPRequestHandler):
                                    query.get("skipped", ["0"])[0] == "1"))
             except ValueError:
                 return self._json(400, {"error": "Invalid offset"})
+        if path == "/api/explorer/trial":
+            if not sess:
+                return self._json(401, {"error": "unauthorized"})
+            if not engine.explorer:
+                return self._json(503, {"error": "Explorer unavailable"})
+            try:
+                cid = int(parse_qs(self.path.partition("?")[2]).get("id", [0])[0])
+                trial = engine.explorer.store.trial(cid)
+                if trial:
+                    trial["payload"].pop("tree", None)
+                return self._json(200 if trial else 404, {"trial": trial})
+            except ValueError:
+                return self._json(400, {"error": "Invalid trial id"})
         if path == "/api/patterns/forecasts":
             if not sess:
                 return self._json(401, {"error": "unauthorized"})

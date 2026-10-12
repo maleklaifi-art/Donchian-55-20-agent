@@ -1,5 +1,9 @@
 # Pattern learning — separate section, same agent
 
+The original daily-model experiment documented here continues unchanged. The same
+dashboard also hosts the multi-timeframe strategy explorer described in
+[EXPLORER.md](EXPLORER.md), with separate state and a frozen forward-test protocol.
+
 This is an additional research worker and dashboard section. It learns numerical
 patterns from all eligible daily observations across the fixed 19-coin universe,
 including days without a Donchian breakout. The existing Donchian execution engine,

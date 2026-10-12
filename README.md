@@ -26,6 +26,12 @@ for schedules, limitations, optional Claude configuration and adoption criteria.
 
 ## Pattern learning beyond Donchian
 
+The same section now includes a **1H / 4H / 1D strategy explorer** for all 19
+coins: 363 predeclared candidates, controlled one-factor improvements, matched
+parent backtests and new-data forward paper comparisons. It records failures,
+uses a fixed search budget, and never adopts strategies into execution. See
+[EXPLORER.md](EXPLORER.md) for the catalogue, timing, limits and scientific protocol.
+
 A separate **Pattern learning · beyond Donchian** section trains a small regression
 tree on price, volume, volatility and Bitcoin conditions across the 19 coins. It
 shows learned rules, chronological validation, dated seven-day forecasts and an

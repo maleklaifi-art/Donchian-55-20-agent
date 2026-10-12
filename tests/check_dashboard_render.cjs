@@ -196,3 +196,20 @@ assert.match(elements.get('patternRules').innerHTML,/&lt;script&gt;/);
 assert.match(elements.get('patternForecasts').innerHTML,/Pending/);
 assert.equal(elements.get('patternNext').disabled,true);
 console.log('Pattern training, failure evidence, paper comparison, pending forecasts and escaping checks passed.');
+
+// Explorer evidence: controls, single changes, failures, dates and escaping.
+vm.runInContext(source.slice(0, source.indexOf("  $('startBtn').addEventListener")) +
+ '\n globalThis.renderExplorer=renderExplorer; globalThis.renderExplorerEvidence=renderExplorerEvidence;\n})();',context);
+context.renderExplorer({enabled:true,status:{stage:'DOWNLOADING',message:'History ready 0/19'},spec:{weekly_budget:12,forward_slots:3},catalogue_size:363,trials:[],attempted:0,recent_attempts:0});
+assert.match(elements.get('explorerNotice').textContent,/0\/19/);
+assert.match(elements.get('explorerSummary').innerHTML,/1H · 4H · 1D/);
+assert.match(elements.get('explorerSpec').innerHTML,/cannot guarantee/);
+context.renderExplorerEvidence({id:2,registered_ms:1,payload:{candidate:{kind:'CONTROLLED_CHANGE',hypothesis:'<script>bad</script>',parent_id:'1h:breakout:v1:none',change:{factor:'entry_bars',before:20,after:55}},
+ historical:{candidate:metrics,baseline:{...metrics,return_pct:6},parent:{...metrics,return_pct:8},gates:{parent_net_return:false},folds:[]},
+ timeline:[{time_ms:1,status:'REJECTED',message:'<script>bad</script>'}]}});
+assert.match(elements.get('explorerHypothesis').textContent,/Single change: entry_bars, 20 → 55/);
+assert.match(elements.get('explorerComparisons').innerHTML,/Unchanged parent/);
+assert.match(elements.get('explorerGates').innerHTML,/FAIL \/ INSUFFICIENT/);
+assert.doesNotMatch(elements.get('explorerTimeline').innerHTML,/<script>/);
+assert.match(elements.get('explorerTimeline').innerHTML,/&lt;script&gt;/);
+console.log('Explorer empty state, single-change controls, evidence, failure and escaping checks passed.');
