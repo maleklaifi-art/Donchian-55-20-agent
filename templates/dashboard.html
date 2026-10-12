@@ -78,7 +78,33 @@ button,input,select{font:inherit}
 @media(max-width:1100px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.wrap{padding:12px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cards{grid-template-columns:1fr}.settings-grid{grid-template-columns:1fr}.stat .v{font-size:19px}.top{align-items:flex-start}.controls{width:100%}.btn{flex:1}.section{border-radius:12px}}
 
-    .research-body{padding:18px 20px}.cycle-track{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:16px 0}.cycle-step{border:1px solid #dce4ee;border-radius:10px;padding:12px;background:#f8fafc}.cycle-step b{display:block;font-size:13px}.cycle-step small{display:block;margin-top:5px;color:#64748b}.cycle-step.done{border-color:#a7d8c5;background:#f1faf5}.cycle-step.current{border-color:#4f46e5;background:#eef2ff}.research-summary{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.research-note{color:#526277;font-size:12px;line-height:1.6;margin:10px 0}.research-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0}.research-controls select,.research-controls input{padding:8px;border:1px solid #cbd5e1;border-radius:7px;background:white}.research-controls label{font-size:12px}.evidence-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.evidence-card{border:1px solid #e2e8f0;border-radius:10px;padding:14px;min-width:0}.evidence-card h3{margin:0 0 8px;font-size:14px}.research-timeline{max-height:300px;overflow:auto;margin:10px 0;padding-left:22px;font-size:12px;line-height:1.7}.research-timeline li{padding-bottom:8px}.status-label{font-size:11px;background:#eef2ff;border-radius:6px;padding:5px 9px;color:#3730a3}.research-totals{display:flex;flex-wrap:wrap;gap:18px;font-size:12px;margin:10px 0}.research-totals b{display:block;font-size:18px}.decision-note{max-width:300px;white-space:normal;min-width:140px}.gate-pass{color:#15803d}.gate-fail{color:#b45309}@media(max-width:750px){.cycle-track{grid-template-columns:repeat(2,minmax(0,1fr))}.evidence-grid{grid-template-columns:1fr}.research-body{padding:12px}.research-controls select{max-width:100%}}
+.research-body{padding:18px 20px}
+.cycle-track{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:16px 0}
+.cycle-step{border:1px solid #334155;border-radius:10px;padding:12px;background:var(--panel2);color:var(--text)}
+.cycle-step b{display:block;font-size:14px}
+.cycle-step small{display:block;margin-top:5px;color:#cbd5e1;font-size:12px}
+.cycle-step.done{border-color:#34d399;background:#052e25}
+.cycle-step.current{border-color:var(--accent);background:#172554}
+.research-summary{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.research-note{color:var(--muted);font-size:13px;line-height:1.6;margin:10px 0}
+.research-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0}
+.research-controls select,.research-controls input{padding:8px;border:1px solid #475569;border-radius:7px;background:#0b1220;color:var(--text)}
+.research-controls select option{background:#0b1220;color:var(--text)}
+.research-controls input[type=checkbox]{accent-color:var(--accent)}
+.research-controls select:focus-visible,.research-controls input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.research-controls label{font-size:13px}
+.evidence-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.evidence-card{border:1px solid #334155;border-radius:10px;padding:14px;min-width:0;background:var(--panel2);color:var(--text)}
+.evidence-card h3{margin:0 0 8px;font-size:14px}
+.research-timeline{max-height:300px;overflow:auto;margin:10px 0;padding-left:22px;font-size:13px;line-height:1.7}
+.research-timeline li{padding-bottom:8px}
+.status-label{font-size:11px;background:#172554;border-radius:6px;padding:5px 9px;color:#bfdbfe}
+.research-totals{display:flex;flex-wrap:wrap;gap:18px;font-size:12px;margin:10px 0}
+.research-totals b{display:block;font-size:18px}
+.decision-note{max-width:300px;white-space:normal;min-width:140px}
+.gate-pass{color:var(--good)}
+.gate-fail{color:var(--warn)}
+@media(max-width:750px){.cycle-track{grid-template-columns:repeat(2,minmax(0,1fr))}.evidence-grid{grid-template-columns:1fr}.research-body{padding:12px}.research-controls select{max-width:100%}}
 </style>
 </head>
 <body>
