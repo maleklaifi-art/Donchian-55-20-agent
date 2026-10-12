@@ -70,7 +70,7 @@ def test_retry_only_when_latest_closed_candle_is_missing(tmp_path, monkeypatch, 
     sleep = Mock()
     monkeypatch.setattr(demo_trader.time, 'sleep', sleep)
     cfg = demo_trader.BotConfig(scan_workers=1, signal_log=str(tmp_path / 'signals.json'))
-    result = demo_trader.scan_market_detailed(market, cfg, DonchianConfig(), Mock())
+    result = demo_trader.scan_market_detailed(market, cfg, DonchianConfig(adx_threshold=-1), Mock())
     assert market.klines.call_count == calls
     assert sleep.call_count == calls - 1
     assert len(result['signals']) == signals

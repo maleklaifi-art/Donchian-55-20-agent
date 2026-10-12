@@ -7,10 +7,12 @@ from typing import List, Optional
 
 DAY_MS = 86_400_000
 
-# Spec default universe: 10 Binance USDT pairs (editable from the dashboard).
+# Spec default universe: 19 Binance USDT pairs (editable from the dashboard).
 DEFAULT_UNIVERSE_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT",
+    "ATOMUSDT", "BCHUSDT", "TRXUSDT", "NEARUSDT", "UNIUSDT",
+    "XLMUSDT", "ALGOUSDT", "VETUSDT", "FILUSDT",
 ]
 
 
@@ -28,6 +30,9 @@ class Candle:
 
 @dataclass
 class DonchianConfig:
+    adx_period: int = 14
+    adx_threshold: float = 25.0  # strict >; entry only
+    strategy_version: str = "donchian_55_20_adx25_v1"
     entry_period: int = 55          # entry channel: highest high of previous N days
     exit_period: int = 20           # exit channel: lowest low of previous N days
     atr_period: int = 20            # Wilder ATR on daily candles
@@ -49,7 +54,9 @@ class Signal:
     atr: float                      # Wilder ATR(atr_period) on daily candles
     stop_distance: float            # sizing distance = multiplier x ATR (no stop order is placed)
     universe: str = ""
-    strategy_version: str = "donchian_55_20_v1"
+    strategy_version: str = "donchian_55_20_adx25_v1"
+    adx: Optional[float] = None
+    exit_period: int = 20
 
     def to_dict(self):
         return asdict(self)
@@ -66,6 +73,7 @@ class Evaluation:
     exit_channel: Optional[float] = None
     atr: Optional[float] = None
     holding: bool = False
+    adx: Optional[float] = None
 
     @property
     def action(self) -> str:
@@ -80,6 +88,7 @@ class Evaluation:
             "stage": self.rejection_stage or "No signal",
             "reason": self.rejection_reason or "No channel signal today",
             "holding": self.holding,
+            "adx": self.adx,
         }
         if self.entry_channel is not None:
             row["entry_channel"] = self.entry_channel
@@ -129,6 +138,45 @@ def wilders_atr(daily: List[Candle], period: int) -> Optional[float]:
     for tr in true_ranges[period:]:
         atr = (atr * (period - 1) + tr) / period
     return atr
+
+
+def wilders_adx_series(daily: List[Candle], period: int = 14):
+    """Wilder DMI/ADX with SMA seeds; first ADX at index 2*period-1.
+
+    The first true range for DMI uses bar 1 and bar 0's close. Zero movement
+    yields DX=0. All inputs must be completed, contiguous candles.
+    """
+    result = [None] * len(daily)
+    if period < 2 or len(daily) < 2 * period:
+        return result
+    tr, plus, minus = [], [], []
+    for prev, bar in zip(daily, daily[1:]):
+        up, down = bar.high - prev.high, prev.low - bar.low
+        plus.append(up if up > down and up > 0 else 0.0)
+        minus.append(down if down > up and down > 0 else 0.0)
+        tr.append(max(bar.high-bar.low, abs(bar.high-prev.close), abs(bar.low-prev.close)))
+    st, sp, sm = (sum(v[:period]) / period for v in (tr, plus, minus))
+    seed = []
+    adx = None
+    for i in range(period, len(daily)):
+        if i > period:
+            st, sp, sm = ((old*(period-1)+values[i-1])/period
+                          for old, values in ((st,tr),(sp,plus),(sm,minus)))
+        # TR cancels in DX when TR > 0; preserve zero-range behavior.
+        dx = 100 * abs(sp-sm)/(sp+sm) if st > 0 and sp+sm > 0 else 0.0
+        if adx is None:
+            seed.append(dx)
+            if len(seed) == period:
+                adx = sum(seed)/period
+        else:
+            adx = (adx*(period-1)+dx)/period
+        result[i] = adx
+    return result
+
+
+def wilders_adx(daily: List[Candle], period: int = 14):
+    values = wilders_adx_series(daily, period)
+    return values[-1] if values else None
 
 
 def _valid_daily(candles: List[Candle]) -> bool:
@@ -190,7 +238,8 @@ def evaluate_donchian(
     if atr is None or not (math.isfinite(atr) and atr > 0):
         return reject("Data", f"ATR({cfg.atr_period}) is unavailable")
 
-    context = dict(entry_channel=entry_channel, exit_channel=exit_channel, atr=atr, holding=holding)
+    adx = wilders_adx(closed, cfg.adx_period)
+    context = dict(entry_channel=entry_channel, exit_channel=exit_channel, atr=atr, holding=holding, adx=adx)
     closed_at = datetime.fromtimestamp(signal_day.close_time / 1000, tz=timezone.utc).isoformat()
 
     if holding:
@@ -206,6 +255,7 @@ def evaluate_donchian(
                 atr=atr,
                 stop_distance=cfg.atr_multiplier * atr,
                 universe=universe,
+                strategy_version=cfg.strategy_version, adx=adx, exit_period=cfg.exit_period,
             ), **context)
         return reject(
             "Held",
@@ -214,6 +264,10 @@ def evaluate_donchian(
         )
 
     if signal_day.close > entry_channel:
+        if adx is None or not math.isfinite(adx):
+            return reject("Data", f"ADX({cfg.adx_period}) is unavailable", **context)
+        if adx <= cfg.adx_threshold:
+            return reject("ADX", f"Breakout confirmed but ADX({cfg.adx_period}) {adx:.4f} must be > {cfg.adx_threshold:g}", **context)
         if not within_entry_grace(now_ms, cfg.entry_grace_minutes):
             return reject(
                 "Entry",
@@ -231,6 +285,7 @@ def evaluate_donchian(
             atr=atr,
             stop_distance=cfg.atr_multiplier * atr,
             universe=universe,
+            strategy_version=cfg.strategy_version, adx=adx, exit_period=cfg.exit_period,
         ), **context)
     return reject(
         "Entry",

@@ -30,10 +30,16 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
     try:
         assert request('GET', '/healthz')[0] == 200
         assert request('GET', '/api/status')[0] == 401
+        assert request('GET', '/api/research/decisions')[0] == 401
+        assert request('GET', '/api/research/cycle?id=1')[0] == 401
         sid, rec = app.make_session()
         old_cookie = {'Cookie': 'nr7_session=' + sid}
         assert request('GET', '/api/status', headers=old_cookie)[0] == 401
         headers = {'Cookie': 'donchian_session=' + sid, 'Content-Type': 'application/json'}
+        assert request('GET', '/api/research/decisions?offset=bad', headers=headers)[0] == 400
+        code, text = request('GET', '/api/research/decisions?symbol=BTCUSDT&skipped=1', headers=headers)
+        assert code == 200 and json.loads(text) == {'total': 0, 'rows': []}
+        assert request('GET', '/api/research/cycle?id=999', headers=headers)[0] == 404
 
         # Strategy settings: Donchian parameters round trip through the API.
         body = json.dumps(dict(risk_per_trade_pct=0.5, entry_period=60, exit_period=25,
@@ -48,7 +54,7 @@ def test_dashboard_settings_api_universes_capital_and_restart(tmp_path, monkeypa
         assert (value['entry_period'], value['exit_period']) == (60, 25)
         assert (value['atr_period'], value['atr_multiplier']) == (14, 1.5)
         assert value['daily_history_bars'] == 200 and value['entry_grace_minutes'] == 10
-        assert value['strategy_version'] == 'donchian_55_20_v1'
+        assert value['strategy_version'].startswith('manual_')
         assert value['schedule'] == 'Daily at 00:00 UTC'
         for legacy in ['top_n', 'app_minimum_surge', 'minimum_reward_risk', 'hourly_history_bars']:
             assert legacy not in value

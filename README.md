@@ -8,13 +8,21 @@ The cloud service runs continuously. Your PC, browser, and home Wi-Fi do not nee
 
 The agent does not use AI discretion to invent trades. It scans independently in the cloud and executes deterministic rules with Testnet execution.
 
-### Strategy — Donchian 55/20 (daily, long-only spot)
+### Strategy — Donchian 55/20 + ADX25 (daily, long-only spot)
 
-- **Entry** — right after `00:00 UTC`, if the just-closed daily close is strictly above the highest high of the previous **55** daily candles (signal day excluded, no lookahead), submit a market BUY within the grace window (default **15 minutes**). Signals outside the window are rejected as stale.
+- **Entry** — right after `00:00 UTC`, if the just-closed daily close is strictly above the highest high of the previous **55** daily candles (signal day excluded, no lookahead), require Wilder ADX(14) **strictly above 25**, then submit a market BUY within the grace window (default **15 minutes**). Signals outside the window are rejected as stale.
 - **Exit** — if a position is held and the just-closed daily close is strictly below the lowest low of the previous **20** daily candles (signal day excluded), submit a market SELL. There is **no grace window** on exits: restart recovery may flatten the position whenever the condition holds.
 - **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. There is **no fixed dollar position cap**. Equity includes current open-position P&L and is bounded by actual Testnet backing. The order uses at most available cash, without an arbitrary reserve. Unrealized gains affect risk sizing but cannot be spent as cash.
 - **No stop orders / no OCO.** Exits happen only through the daily 20-day-low channel exit (legacy positions opened with protective OCO orders are still reconciled by the exit monitor).
 - Long-only, spot, one open position per symbol, one entry per signal (exactly-once state).
+
+## Research dashboard
+
+The dashboard now shows **Analyze → Propose → Test → Compare → Adopt or reject**,
+weekly reviews, forward validation gates, and all observed decisions including
+skipped coins and their subsequent gains and losses. Changes apply only to future
+entries; existing positions retain their original exit rules. See [RESEARCH.md](RESEARCH.md)
+for schedules, limitations, optional Claude configuration and adoption criteria.
 
 ## Risk management
 
@@ -41,7 +49,7 @@ The dashboard shows:
 - Win rate, wins/losses, realized R, today's R and P&L.
 - START NEW TRADES and STOP NEW TRADES controls.
 - Editable strategy settings: funded capital, risk %, entry/exit periods, ATR period/multiplier, history fetch page size, entry grace window, scan workers.
-- One editable active coin list (default **Core 10**: BTC, ETH, BNB, SOL, XRP, ADA, AVAX, DOT, LINK, LTC): change its name or coins and press SAVE SETTINGS.
+- One editable active coin list (default **Core 19**: BTC, ETH, BNB, SOL, XRP, ADA, AVAX, DOT, LINK, LTC, ATOM, BCH, TRX, NEAR, UNI, XLM, ALGO, VET, FIL): change its name or coins and press SAVE SETTINGS.
 - Optional Telegram notifications.
 
 **STOP NEW TRADES does not close existing positions.** Open positions continue to be flattened by the daily channel exit.

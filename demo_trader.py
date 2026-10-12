@@ -50,7 +50,7 @@ class BotConfig:
     quote_asset: str = "USDT"
 
     # Active universe (dashboard-editable named universes).
-    universe_name: str = "Core 10"
+    universe_name: str = "Core 19"
     universe_symbols: List[str] = field(default_factory=lambda: list(DEFAULT_UNIVERSE_SYMBOLS))
 
     # Per-trade risk: risk_per_trade_pct of equity, sized via 2 x ATR(20).
@@ -91,6 +91,9 @@ class Position:
     risk_usdt: float
     opened_at: str
     # Donchian bookkeeping (new positions).
+    strategy_version: str = "legacy_donchian"
+    exit_period: int = 20
+    adx: Optional[float] = None
     atr: Optional[float] = None
     exit_channel: Optional[float] = None
     entry_channel: Optional[float] = None
@@ -478,6 +481,7 @@ def scan_market_detailed(
     scfg: DonchianConfig,
     logger: EventLogger,
     open_symbols: Optional[set] = None,
+    position_rules: Optional[dict] = None,
 ) -> dict:
     holding = set(open_symbols or ())
     # Removing a coin from the entry list must not abandon an existing position.
@@ -488,16 +492,21 @@ def scan_market_detailed(
     entries: List[Signal] = []
     exits: List[Signal] = []
     filtered = []
+    decisions = []
     errors = 0
     started = time.monotonic()
 
     def one(sym: str):
+        from dataclasses import replace
+        pos = (position_rules or {}).get(sym, {})
+        symbol_cfg = replace(scfg, exit_period=int(pos.get("exit_period", scfg.exit_period)),
+                             strategy_version=pos.get("strategy_version", scfg.strategy_version)) if sym in holding else scfg
         # Start immediately at midnight. Retry only if the exchange still
         # returns yesterday's data; never evaluate an unfinished candle.
         for attempt in range(3):
             daily = market.klines(sym, "1d", scfg.daily_history_bars)
             evaluation = evaluate_donchian(
-                sym, daily, scfg, now_ms, holding=sym in holding, universe=cfg.universe_name,
+                sym, daily, symbol_cfg, now_ms, holding=sym in holding, universe=cfg.universe_name,
             )
             stale = (evaluation.rejection_stage == "Data"
                      and (evaluation.rejection_reason or "").startswith("Stale daily candles:"))
@@ -511,6 +520,14 @@ def scan_market_detailed(
             sym = futs[fut]
             try:
                 evaluation: Evaluation = fut.result()
+                held_rules = (position_rules or {}).get(sym, {}) if sym in holding else {}
+                decisions.append({**evaluation.filtered_dict(), "action": evaluation.action,
+                    "stage": evaluation.action if evaluation.signal else evaluation.filtered_dict()["stage"],
+                    "signal_close_ms": (now_ms // 86_400_000) * 86_400_000 - 1,
+                    "strategy_version": scfg.strategy_version,
+                    "position_strategy_version": held_rules.get("strategy_version"),
+                    "adx_threshold": scfg.adx_threshold,
+                    "entry_period": scfg.entry_period, "exit_period": held_rules.get("exit_period", scfg.exit_period)})
                 if evaluation.signal is not None:
                     sig = evaluation.signal
                     if sig.direction == "EXIT":
@@ -524,6 +541,17 @@ def scan_market_detailed(
             except Exception as exc:
                 errors += 1
                 logger.emit("SCAN_ERROR", symbol=sym, error=str(exc))
+                row = {"symbol": sym, "price": None, "stage": "Data", "reason": str(exc), "action": "NO_ACTION",
+                       "signal_close_ms": (now_ms // 86_400_000)*86_400_000-1, "strategy_version": scfg.strategy_version}
+                decisions.append(row)
+                filtered.append(row)
+    for sym in requested:
+        if sym not in symbols:
+            row = {"symbol": sym, "price": None, "stage": "Universe", "reason": "Pair unavailable or excluded on market data source",
+                   "action": "NO_ACTION", "signal_close_ms": (now_ms//86_400_000)*86_400_000-1,
+                   "strategy_version": scfg.strategy_version}
+            decisions.append(row)
+            filtered.append(row)
     priority = {symbol: i for i, symbol in enumerate(cfg.universe_symbols)}
     entries.sort(key=lambda x: (x.signal_close_ms, priority.get(x.symbol, len(priority)), x.symbol))
     exits.sort(key=lambda x: x.symbol)
@@ -544,6 +572,7 @@ def scan_market_detailed(
         "signals": [x.to_dict() for x in entries],
         "exit_signals": [x.to_dict() for x in exits],
         "filtered": filtered,
+        "decisions": decisions,
     }
     logger.emit(
         "SCAN_COMPLETE",
@@ -842,6 +871,7 @@ def place_signal(
         risk_usdt=float(position_qty) * stop_distance,
         opened_at=datetime.now(timezone.utc).isoformat(),
         atr=sig.atr,
+        adx=sig.adx, strategy_version=sig.strategy_version, exit_period=sig.exit_period,
         exit_channel=sig.exit_channel,
         entry_channel=sig.entry_channel,
         entry_cost_usdt=cumulative_quote + fees["extra_cost_usdt"],
@@ -985,6 +1015,7 @@ def close_position(
         # The trade row is keyed by the entry signal; the exit signal gets its own id.
         "signal_key": pos.get("signal_key") or key, "exit_signal_key": key,
         "opened_at": pos.get("opened_at"),
+        "strategy_version": pos.get("strategy_version", "legacy_donchian"),
         "entry_price": entry_price, "exit_price": exit_price,
         "quantity": closed_qty, "atr": pos.get("atr"),
         "entry_channel": pos.get("entry_channel"), "exit_channel": pos.get("exit_channel"),

@@ -40,7 +40,7 @@ def test_old_data_rejected_before_any_strategy_calculation(monkeypatch):
     called = []
     monkeypatch.setattr(strategy, "wilders_atr", lambda *a, **k: called.append(1))
     stale_now = NOW + 10 * DAY_MS
-    result = evaluate_donchian("EOSUSDT", daily(FLAT), DonchianConfig(), stale_now)
+    result = evaluate_donchian("EOSUSDT", daily(FLAT), DonchianConfig(adx_threshold=-1), stale_now)
     assert result.signal is None
     assert result.rejection_stage == "Data"
     assert "Stale daily candles" in result.rejection_reason
@@ -54,7 +54,7 @@ def test_current_day_reaches_the_evaluator_and_ignores_the_open_candle(monkeypat
     seen = []
     original = strategy.wilders_atr
     monkeypatch.setattr(strategy, "wilders_atr", lambda bars, period: (seen.append(len(bars)), original(bars, period))[1])
-    result = evaluate_donchian("TESTUSDT", rows, DonchianConfig(), NOW + 20_000)
+    result = evaluate_donchian("TESTUSDT", rows, DonchianConfig(adx_threshold=-1), NOW + 20_000)
     assert result.signal is not None and result.signal.direction == "LONG"
     assert seen == [61]
 
@@ -63,7 +63,7 @@ def test_gap_between_daily_candles_cannot_stand_in_for_a_missing_day():
     rows = daily(FLAT + [(108, 115, 105, 110)])
     del rows[-2]
     rows.insert(0, daily([(100, 101, 99, 100)], start_day=-1)[0])
-    result = evaluate_donchian("TESTUSDT", rows, DonchianConfig(), NOW)
+    result = evaluate_donchian("TESTUSDT", rows, DonchianConfig(adx_threshold=-1), NOW)
     assert result.signal is None and result.rejection_stage == "Data"
     assert "consecutive" in result.rejection_reason
 
@@ -139,14 +139,14 @@ def scan(market, tmp_path, holding=("EXITMEUSDT", "HELDUSDT")):
                     event_log=str(tmp_path / "events.jsonl"))
     logger = EventLogger(cfg.event_log)
     with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
-        return scan_market_detailed(market, cfg, DonchianConfig(), logger, open_symbols=set(holding))
+        return scan_market_detailed(market, cfg, DonchianConfig(adx_threshold=-1), logger, open_symbols=set(holding))
 
 
 def test_scan_splits_entries_exits_and_no_action(tmp_path):
     market = FakeMarket(universe_data())
     snapshot = scan(market, tmp_path)
     assert snapshot["coins_scanned"] == 4
-    assert snapshot["universe"] == "Core 10"
+    assert snapshot["universe"] == "Core 19"
     assert snapshot["entry_count"] == snapshot["valid_count"] == 1
     assert snapshot["exit_count"] == 1
     assert snapshot["error_count"] == 0
@@ -202,12 +202,12 @@ def test_removed_held_coins_still_receive_exit_checks(tmp_path):
     cfg = BotConfig(scan_workers=1, universe_symbols=["FLATUSDT"],
                     signal_log=str(tmp_path / "signals.json"))
     with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
-        snapshot = scan_market_detailed(market, cfg, DonchianConfig(), Mock(),
+        snapshot = scan_market_detailed(market, cfg, DonchianConfig(adx_threshold=-1), Mock(),
                                         open_symbols={"EXITMEUSDT", "BREAKOUTUSDT"})
     assert {s for s, _, _ in market.kline_calls} == {"FLATUSDT", "EXITMEUSDT", "BREAKOUTUSDT"}
     assert [s["symbol"] for s in snapshot["exit_signals"]] == ["EXITMEUSDT"]
     assert snapshot["signals"] == []  # held breakout cannot become a fresh entry
     market.kline_calls.clear()
     with patch.object(demo_trader.time, "time", return_value=NOW / 1000):
-        scan_market_detailed(market, cfg, DonchianConfig(), Mock(), open_symbols=set())
+        scan_market_detailed(market, cfg, DonchianConfig(adx_threshold=-1), Mock(), open_symbols=set())
     assert [s for s, _, _ in market.kline_calls] == ["FLATUSDT"]

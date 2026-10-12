@@ -13,12 +13,25 @@ from strategy import DEFAULT_UNIVERSE_SYMBOLS
 
 
 def default_universes() -> List[Dict[str, Any]]:
-    return [{"name": "Core 10", "symbols": list(DEFAULT_UNIVERSE_SYMBOLS)}]
+    return [{"name": "Core 19", "symbols": list(DEFAULT_UNIVERSE_SYMBOLS)}]
 
 
 @dataclass
 class RuntimeSettings:
-    settings_revision: int = 5
+    settings_revision: int = 6
+    adx_period: int = 14
+    adx_threshold: float = 25.0
+    strategy_version: str = "donchian_55_20_adx25_v1"
+    legacy_position_exit_period: int = 20
+    research_enabled: bool = True
+    research_auto_adopt: bool = True
+    research_review_days: int = 7
+    research_forward_days: int = 90
+    research_min_trades: int = 20
+    research_min_symbols: int = 5
+    research_fee_bps: float = 25.0
+    research_slippage_bps: float = 5.0
+    research_min_notional: float = 5.0
     starting_capital_usdt: float = 200.0
     risk_per_trade_pct: float = 1.0
     entry_period: int = 55
@@ -29,7 +42,7 @@ class RuntimeSettings:
     entry_grace_minutes: int = 15
     scan_workers: int = 100
     universes: List[Dict[str, Any]] = field(default_factory=default_universes)
-    active_universe: str = "Core 10"
+    active_universe: str = "Core 19"
     telegram_enabled: bool = False
     telegram_chat_id: str = ""
     telegram_bot_token: str = ""
@@ -37,6 +50,7 @@ class RuntimeSettings:
     def public_dict(self) -> dict:
         data = asdict(self)
         data.pop("settings_revision", None)
+        data.pop("legacy_position_exit_period", None)
         data["telegram_bot_token"] = ""
         data["telegram_token_configured"] = bool(self.telegram_bot_token)
         active = next(
@@ -44,7 +58,7 @@ class RuntimeSettings:
             None,
         )
         data["active_universe_symbols"] = list(active["symbols"]) if active else []
-        data["strategy_version"] = "donchian_55_20_v1"
+        data["strategy_version"] = self.strategy_version
         data["schedule"] = "Daily at 00:00 UTC"
         data["sizing_rule"] = "risk % of equity / (2 x ATR)"
         return data
@@ -55,6 +69,7 @@ class SettingsStore:
         self.path = Path(path)
         self._lock = threading.RLock()
         self._value = RuntimeSettings(starting_capital_usdt=starting_capital_usdt)
+        self.legacy_exit_period = 20
         self._load()
 
     def _load(self):
@@ -63,6 +78,8 @@ class SettingsStore:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             previous_revision = int(raw.get("settings_revision", 1))
+            self.legacy_exit_period = int(raw.get("legacy_position_exit_period", raw.get("exit_period", 20)))
+            self._value.legacy_position_exit_period = self.legacy_exit_period
             if previous_revision < 5:
                 # Pre-Donchian files predate the documented capital range; clamp
                 # instead of refusing to boot, then rewrite at revision 5.
@@ -72,13 +89,23 @@ class SettingsStore:
                         raw["starting_capital_usdt"] = min(max(capital, 10.0), 1_000_000.0)
                 except (TypeError, ValueError):
                     pass
+            if previous_revision < 6:
+                # Explicit cutover to the user's agreed 55/20 + ADX25 baseline.
+                raw.update(entry_period=55, exit_period=20, adx_period=14,
+                           adx_threshold=25.0, strategy_version="donchian_55_20_adx25_v1")
+                active_name = raw.get("active_universe", "Core 19")
+                universes = raw.get("universes") or default_universes()
+                for universe in universes:
+                    if universe["name"].lower() == active_name.lower():
+                        universe["symbols"] = list(DEFAULT_UNIVERSE_SYMBOLS)
+                raw["universes"] = universes
             self._value = self._validated(raw, self._value)
             if previous_revision < 2 and self._value.scan_workers == 8:
                 self._value.scan_workers = 50
             if previous_revision < 3 and self._value.scan_workers in (8, 50):
                 self._value.scan_workers = 100
-            self._value.settings_revision = 5
-            if previous_revision < 5:
+            self._value.settings_revision = 6
+            if previous_revision < 6:
                 self._write(self._value)
         except Exception as exc:
             raise RuntimeError(f"settings file is unreadable: {self.path}: {exc}") from exc
@@ -122,6 +149,23 @@ class SettingsStore:
 
     def _validated(self, raw: Dict[str, Any], old: RuntimeSettings) -> RuntimeSettings:
         value = RuntimeSettings(**asdict(old))
+        value.adx_period = self._number(raw, "adx_period", value.adx_period, 2, 100, True)
+        value.adx_threshold = self._number(raw, "adx_threshold", value.adx_threshold, 0, 100)
+        for key in ("research_enabled", "research_auto_adopt"):
+            if key in raw:
+                if not isinstance(raw[key], bool):
+                    raise ValueError(f"{key} must be boolean")
+                setattr(value, key, raw[key])
+        for key, low, high, integer in (
+            ("research_review_days", 1, 30, True), ("research_forward_days", 30, 730, True),
+            ("research_min_trades", 10, 1000, True), ("research_min_symbols", 2, 19, True),
+            ("research_fee_bps", 0, 200, False), ("research_slippage_bps", 0, 200, False),
+            ("research_min_notional", 0, 1000, False)):
+            setattr(value, key, self._number(raw, key, getattr(value, key), low, high, integer))
+        # Only internal promotion code supplies this key; the HTTP handler removes it.
+        if "strategy_version" in raw:
+            value.strategy_version = str(raw["strategy_version"])
+
         value.starting_capital_usdt = self._number(
             raw, "starting_capital_usdt", value.starting_capital_usdt, 10, 1_000_000
         )

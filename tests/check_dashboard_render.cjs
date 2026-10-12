@@ -46,9 +46,9 @@ const openRow = {symbol: 'BTCUSDT', signal_key: 'BTCUSDT:1', entry_price: 60000,
 context.renderOpen([openRow]);
 let output = elements.get('openCards').innerHTML;
 assert.match(output, /Exit channel \(20d low\)<\/span><b>55,000<\/b>/);
-assert.match(output, /Entry channel \(55d high\)<\/span><b>59,000<\/b>/);
+assert.match(output, /Entry channel \(at entry\)<\/span><b>59,000<\/b>/);
 assert.match(output, /Distance to exit channel/);
-assert.match(output, /ATR\(20\)<\/span><b>900<\/b>/);
+assert.match(output, /ATR at entry<\/span><b>900<\/b>/);
 assert.match(output, /No stop order/);
 
 context.renderClosed([{symbol: 'ETHUSDT', outcome: 'CHANNEL_EXIT', entry_price: 2400, exit_price: 2300,
@@ -151,3 +151,26 @@ context.fetch = async (url, options) => {
   assert.deepEqual(posted[0].universes[0].symbols,['ETHUSDT','LINKUSDT']);
   console.log('Universe add/remove, rename, collision and direct-save checks passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Research states and model-generated strings are rendered through the real UI.
+vm.runInContext('globalThis.renderResearchForTest=undefined', context);
+const researchSource=source.slice(0,source.indexOf("  $('startBtn').addEventListener")) +
+ '\n globalThis.renderResearch=renderResearch; globalThis.renderDecisions=renderDecisions;\n})();';
+vm.runInContext(researchSource,context);
+context.renderResearch({enabled:true,auto_adopt:true,review_days:7,trial_count:0,cycles:[],decisions:{total:0,rows:[]}});
+assert.match(elements.get('cycleTrack').innerHTML,/Analyze/);
+assert.match(elements.get('cycleTrack').innerHTML,/Adopt or reject/);
+assert.match(elements.get('researchHypothesis').innerHTML,/No results are fabricated/);
+context.renderResearch({enabled:true,auto_adopt:true,review_days:7,trial_count:1,
+ active_version:'v1',proposer:'Rule-based',notice:'Observing',cycles:[{id:1,status:'OBSERVING',stage:'decide',
+ payload:{hypothesis:'<img src=x onerror=alert(1)>',analysis:{note:'All results',groups:[{stage:'ADX',decisions:19,matured_7d:10,positive_7d:4,avg_7d_net_pct:-2}]},
+ timeline:[{stage:'analyze',message:'Collected'},{stage:'decide',message:'Observe'}]}}],decisions:{total:0,rows:[]}});
+assert.match(elements.get('cycleTrack').innerHTML,/Keep observing/);
+assert.doesNotMatch(elements.get('researchHypothesis').innerHTML,/<img/);
+assert.match(elements.get('researchHypothesis').innerHTML,/&lt;img/);
+assert.match(elements.get('researchAnalysis').innerHTML,/-2/);
+context.renderDecisions({total:1,rows:[{symbol:'AAAUSDT',action:'NO_ACTION',execution:'SKIPPED',reason:'ADX below threshold',payload:{adx:24,adx_threshold:25},outcomes:{'7':{return_pct:10}},strategy_version:'v1'}]});
+assert.match(elements.get('decisionsTable').innerHTML,/10.00%/);
+assert.match(elements.get('decisionsTable').innerHTML,/ADX below threshold/);
+assert.equal(elements.get('decisionNext').disabled,true);
+console.log('Research stages, missed opportunities, negative results, empty state and escaping checks passed.');

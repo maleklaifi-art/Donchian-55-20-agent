@@ -14,6 +14,8 @@ from typing import Dict, Optional
 from urllib.parse import parse_qs
 
 from database import TradeDatabase
+from research_store import ResearchStore
+from research_engine import ResearchEngine, config_for, fingerprint
 from execution_accounting import position_cost
 from demo_trader import (
     BotConfig,
@@ -25,6 +27,7 @@ from demo_trader import (
     load_config,
     load_rules,
     load_state,
+    save_state,
     place_signal,
     scan_market_detailed,
     sync_positions,
@@ -52,6 +55,7 @@ class DashboardLogger(EventLogger):
     def __init__(self, path: str, db: TradeDatabase):
         super().__init__(path)
         self.db = db
+        self.research_store = ResearchStore(db)
 
     def emit(self, event: str, **payload):
         super().emit(event, **payload)
@@ -73,6 +77,10 @@ class DashboardLogger(EventLogger):
                     self.db.mark_signal(sk, "ERROR", payload.get("reason") or event)
         except Exception as exc:
             print(json.dumps({"time": utc_now(), "event": "DASHBOARD_DB_ERROR", "error": str(exc)}), flush=True)
+        try:
+            self.research_store.execution_event(event, payload)
+        except Exception as exc:
+            print(json.dumps({"time": utc_now(), "event": "RESEARCH_AUDIT_ERROR", "error": str(exc)}), flush=True)
 
 
 class CloudDemoEngine:
@@ -126,9 +134,23 @@ class CloudDemoEngine:
         self.next_scan_at_ms = 0
         self.started_at = utc_now()
         self.strategy_config = self._apply_settings(settings_store.get())
+        self.research_store = self.logger.research_store
+        self.research = ResearchEngine(self.research_store, Path(cfg.state_file).parent / "daily_klines",
+                                       settings_store, self._promote_research)
         self._configure_execution()
         with self.state_lock:
-            self.db.backfill_state(load_state(self.cfg.state_file))
+            existing = load_state(self.cfg.state_file)
+            changed = False
+            for position in existing.get("open_positions", {}).values():
+                if "exit_period" not in position:
+                    position["exit_period"] = settings_store.legacy_exit_period
+                    position.setdefault("strategy_version", "legacy_donchian")
+                    changed = True
+            if changed:
+                # Only freeze bookkeeping; preserve every fill, quantity, pending
+                # order and price. This path never calls an execution API.
+                save_state(self.cfg.state_file, existing)
+            self.db.backfill_state(existing)
 
     def _configure_execution(self):
         if not self.credentials_configured:
@@ -152,6 +174,7 @@ class CloudDemoEngine:
             self.logger.emit("EXECUTION_INIT_ERROR", error=str(exc))
 
     def start(self):
+        self.research.start(self.stop_event)
         threading.Thread(target=self._monitor_loop, name="donchian-monitor", daemon=True).start()
         threading.Thread(target=self._scanner_loop, name="donchian-scanner", daemon=True).start()
 
@@ -198,6 +221,8 @@ class CloudDemoEngine:
         # Capital is a funding adjustment, never a reset of trade P&L.
         self.cfg.demo_equity_cap_usdt = settings.starting_capital_usdt
         return DonchianConfig(
+            adx_period=settings.adx_period, adx_threshold=settings.adx_threshold,
+            strategy_version=settings.strategy_version,
             entry_period=settings.entry_period,
             exit_period=settings.exit_period,
             atr_period=settings.atr_period,
@@ -207,10 +232,38 @@ class CloudDemoEngine:
             entry_grace_minutes=settings.entry_grace_minutes,
         )
 
+    def _promote_research(self, cycle):
+        # Candidate selection never receives an exchange client or settings writer.
+        with self.state_lock:
+            if self.scan_in_progress:
+                return None  # Try later; do not mix versions within a scan.
+            settings = self.settings_store.get()
+            if not settings.research_enabled or not settings.research_auto_adopt:
+                return None
+            p = cycle["payload"]
+            if config_for(settings) != p["base"] or settings.strategy_version != p["base_version"]:
+                return False
+            change = p["change"]
+            if change["key"] not in {"entry_period", "adx_threshold"}:
+                return False
+            if p.get("forward", {}).get("gates") is None or not all(p["forward"]["gates"].values()):
+                return False
+            value = self.settings_store.update({change["key"]: change["after"],
+                                                "strategy_version": p["candidate_version"]})
+            self.strategy_config = self._apply_settings(value)
+            self.logger.emit("RESEARCH_ADOPTED", cycle_id=cycle["id"], change=change,
+                             strategy_version=value.strategy_version)
+            return True
+
     def update_settings(self, raw: dict):
         # Serialize funding changes with order submission and exit accounting.
         with self.state_lock:
+            raw = dict(raw)
+            raw.pop("strategy_version", None)
+            before = self.settings_store.get()
             value = self.settings_store.update(raw)
+            if config_for(value) != config_for(before):
+                value = self.settings_store.update({"strategy_version": "manual_"+fingerprint(config_for(value))[:12]})
             self.strategy_config = self._apply_settings(value)
         self.logger.emit("SETTINGS_UPDATED", settings=value.public_dict())
         return value
@@ -240,10 +293,17 @@ class CloudDemoEngine:
                 self.strategy_config,
                 self.logger,
                 open_symbols=set(state.get("open_positions", {})),
+                position_rules=state.get("open_positions", {}),
             )
             with self.meta_lock:
                 self.last_scan_snapshot = snapshot
                 self.last_scan_completed = utc_now()
+            try:
+                self.research_store.record_decisions(snapshot, config_for(settings), self.execution_ready,
+                                                     self.new_entries_enabled())
+            except Exception as exc:
+                # Optional research logging must never prevent a held trade's exit.
+                self.logger.emit("RESEARCH_AUDIT_ERROR", error=str(exc))
             self._send_telegram_snapshot(settings, snapshot)
             if self.execution_ready and self.exec_client is not None:
                 self._execute_snapshot(snapshot)
@@ -254,6 +314,7 @@ class CloudDemoEngine:
         finally:
             with self.meta_lock:
                 self.scan_in_progress = False
+            self.research.wakeup.set()
 
     def _execute_snapshot(self, snapshot: dict):
         """Exits first (frees capital), then entries, all in one state batch."""
@@ -266,7 +327,7 @@ class CloudDemoEngine:
                 try:
                     close_position(Signal(**row), self.market, self.exec_client, self.rules, state, self.cfg, self.logger)
                 except Exception as exc:
-                    self.logger.emit("EXIT_ERROR", symbol=row.get("symbol"), error=str(exc))
+                    self.logger.emit("EXIT_ERROR", symbol=row.get("symbol"), signal_key=f"{row.get('symbol')}:{row.get('signal_close_ms')}", error=str(exc))
             # Exits can realize gains/losses and release cash in this same batch.
             realized = self.db.stats()["realized_pnl_usdt"]
             for row in snapshot.get("signals", []):
@@ -280,7 +341,7 @@ class CloudDemoEngine:
                         realized_pnl_usdt=realized,
                     )
                 except Exception as exc:
-                    self.logger.emit("ENTRY_ERROR", symbol=sig.symbol, error=str(exc))
+                    self.logger.emit("ENTRY_ERROR", symbol=sig.symbol, signal_key=f"{sig.symbol}:{sig.signal_close_ms}", error=str(exc))
 
     def _send_telegram_snapshot(self, settings: RuntimeSettings, snapshot: dict):
         if not settings.telegram_enabled or not settings.telegram_bot_token or not settings.telegram_chat_id:
@@ -385,6 +446,8 @@ class CloudDemoEngine:
             t["entry_channel"] = stored.get("entry_channel", t.get("entry_channel"))
             t["exit_channel"] = stored.get("exit_channel", t.get("exit_channel"))
             t["atr"] = stored.get("atr", t.get("atr"))
+            t["strategy_version"] = stored.get("strategy_version", "legacy_donchian")
+            t["exit_period"] = stored.get("exit_period", self.settings_store.legacy_exit_period)
             exit_channel = t.get("exit_channel")
             t["distance_to_exit_pct"] = ((px / float(exit_channel)) - 1.0) * 100.0 if px > 0 and exit_channel else None
             unrealized += t["unrealized_pnl_usdt"]
@@ -454,6 +517,7 @@ class CloudDemoEngine:
             "recent_events": self.db.recent_events(60),
             "scan": self.last_scan_snapshot,
             "settings": settings.public_dict(),
+            "research": self.research.snapshot(),
         }
 
 ROOT = Path(__file__).resolve().parent
@@ -588,6 +652,26 @@ class Handler(BaseHTTPRequestHandler):
             if not sess:
                 return self._redirect("/login")
             return self._send(200, render_dashboard(sess["csrf"]).encode("utf-8"))
+        if path == "/api/research/decisions":
+            if not sess:
+                return self._json(401, {"error": "unauthorized"})
+            query = parse_qs(self.path.partition("?")[2])
+            try:
+                offset = max(0, int(query.get("offset", [0])[0]))
+                symbol = str(query.get("symbol", [""])[0]).upper() or None
+                return self._json(200, engine.research_store.decisions(200, offset, symbol,
+                                   query.get("skipped", ["0"])[0] == "1"))
+            except ValueError:
+                return self._json(400, {"error": "Invalid offset"})
+        if path == "/api/research/cycle":
+            if not sess:
+                return self._json(401, {"error": "unauthorized"})
+            try:
+                cid = int(parse_qs(self.path.partition("?")[2]).get("id", [0])[0])
+                cycle = engine.research_store.cycle(cid)
+                return self._json(200 if cycle else 404, {"cycle": cycle})
+            except ValueError:
+                return self._json(400, {"error": "Invalid cycle id"})
         if path == "/api/status":
             if not sess:
                 return self._json(401, {"error": "unauthorized"})

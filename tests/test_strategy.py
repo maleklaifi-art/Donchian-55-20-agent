@@ -38,7 +38,7 @@ FLAT = [(100, 101, 99, 100)] * 60
 N_DAYS = 61
 BOUNDARY = N_DAYS * DAY_MS
 NOW_MS = BOUNDARY + 30_000
-CFG = DonchianConfig()
+CFG = DonchianConfig(adx_threshold=-1)
 
 
 def test_rounding():
@@ -89,7 +89,7 @@ def test_breakout_entry_is_long_with_channels_from_prior_days_only():
     assert sig.stop_distance == pytest.approx(2.0 * sig.atr)
     assert sig.atr > 0
     assert sig.universe == "Core 10"
-    assert sig.strategy_version == "donchian_55_20_v1"
+    assert sig.strategy_version == "donchian_55_20_adx25_v1"
 
 
 def test_close_equal_to_channel_high_does_not_break_out():
@@ -183,16 +183,16 @@ def test_filtered_rows_expose_channels_and_reason():
 
 def test_default_settings_schedule_and_universe(tmp_path):
     settings = SettingsStore(str(tmp_path / "missing.json")).get()
-    assert settings.settings_revision == 5
+    assert settings.settings_revision == 6
     assert settings.starting_capital_usdt == 200.0
     assert settings.risk_per_trade_pct == 1.0
     assert (settings.entry_period, settings.exit_period, settings.atr_period, settings.atr_multiplier) == (55, 20, 20, 2.0)
     assert settings.scan_workers == 100
     assert settings.entry_grace_minutes == 15
-    assert settings.active_universe == "Core 10"
+    assert settings.active_universe == "Core 19"
     public = settings.public_dict()
     assert public["schedule"] == "Daily at 00:00 UTC"
-    assert public["strategy_version"] == "donchian_55_20_v1"
+    assert public["strategy_version"] == "donchian_55_20_adx25_v1"
     assert public["sizing_rule"] == "risk % of equity / (2 x ATR)"
     assert public["active_universe_symbols"] == DEFAULT_UNIVERSE_SYMBOLS
     assert public["telegram_bot_token"] == "" and public["telegram_token_configured"] is False
@@ -204,7 +204,7 @@ def test_legacy_worker_settings_migrate_to_100_once(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text('{"scan_workers": 8}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
-    assert migrated.scan_workers == 100 and migrated.settings_revision == 5
+    assert migrated.scan_workers == 100 and migrated.settings_revision == 6
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 8})
@@ -212,7 +212,7 @@ def test_legacy_worker_settings_migrate_to_100_once(tmp_path):
 
     path.write_text('{"settings_revision": 2, "scan_workers": 50}', encoding="utf-8")
     migrated = SettingsStore(str(path)).get()
-    assert migrated.scan_workers == 100 and migrated.settings_revision == 5
+    assert migrated.scan_workers == 100 and migrated.settings_revision == 6
 
     store = SettingsStore(str(path))
     store.update({"scan_workers": 50})
@@ -224,7 +224,7 @@ def test_old_settings_file_clamps_capital_into_the_documented_range(tmp_path):
     path.write_text('{"settings_revision": 4, "starting_capital_usdt": 5, "top_n": 777}', encoding="utf-8")
     loaded = SettingsStore(str(path)).get()
     assert loaded.starting_capital_usdt == 10.0
-    assert loaded.settings_revision == 5
+    assert loaded.settings_revision == 6
     assert "top_n" not in loaded.public_dict()
 
 
@@ -249,7 +249,7 @@ def test_invalid_settings_are_rejected(tmp_path, bad):
     store = SettingsStore(str(tmp_path / "settings.json"))
     with pytest.raises((ValueError, TypeError)):
         store.update(bad)
-    assert SettingsStore(str(tmp_path / "settings.json")).get().settings_revision == 5
+    assert SettingsStore(str(tmp_path / "settings.json")).get().settings_revision == 6
 
 
 def test_universe_edits_round_trip_and_rename_symbols(tmp_path):
