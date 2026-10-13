@@ -78,6 +78,10 @@ class SymbolRules:
     max_qty: Decimal
     min_notional: Decimal
     quote_order_qty_market_allowed: bool
+    stop_loss_allowed: bool = True
+    market_step_size: Decimal = Decimal("0")
+    market_min_qty: Decimal = Decimal("0")
+    market_max_qty: Decimal = Decimal("999999999")
 
 
 @dataclass
@@ -109,6 +113,16 @@ class Position:
     exit_order_ids: list = field(default_factory=list)
     pending_exit_signal: Optional[dict] = None
     pending_exit_client_id: str = ""
+    # Frozen for NEW ATR-stop trades only; absent fields on legacy positions
+    # default to false, never retrofit a stop onto an existing trade.
+    atr_stop_enabled: bool = False
+    fixed_stop_distance: Optional[float] = None
+    fixed_stop_price: Optional[float] = None
+    native_stop_client_id: str = ""
+    native_stop_order_id: int = 0
+    native_stop_state: str = ""
+    native_stop_error: str = ""
+    exit_reason: str = "CHANNEL_EXIT"
     # Legacy OCO bookkeeping (positions opened before the Donchian cutover).
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -205,6 +219,24 @@ class PublicMarketClient:
         return float(x["askPrice"])
 
 
+class BinanceAPIError(RuntimeError):
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
+
+def order_definitely_rejected(exc):
+    """Never treat a timeout, duplicate client ID or missing query as rejection."""
+    if not isinstance(exc, BinanceAPIError):
+        return False
+    if exc.code in {-1013, -1100, -1102, -1111, -1116, -1117, -1130}:
+        return True
+    message = str(exc).lower()
+    return exc.code == -2010 and any(part in message for part in (
+        'insufficient balance', 'trigger immediately', 'immediately trigger',
+        'not supported', 'filter failure'))
+
+
 class TestnetExecutionClient:
     """Binance Spot Testnet only. No production execution URL exists in this class."""
     def __init__(self, api_key: str, api_secret: str, timeout_s: int, recv_window_ms: int):
@@ -240,7 +272,11 @@ class TestnetExecutionClient:
         url = self.base + path + "?" + query
         r = self.s.request(method, url, timeout=self.timeout_s)
         if r.status_code >= 400:
-            raise RuntimeError(f"Binance testnet {method} {path} failed {r.status_code}: {r.text}")
+            try:
+                code = r.json().get("code")
+            except ValueError:
+                code = None
+            raise BinanceAPIError(f"Binance testnet {method} {path} failed {r.status_code}: {r.text}", code)
         return r.json()
 
     def account(self):
@@ -299,6 +335,26 @@ class TestnetExecutionClient:
                 return self.order(symbol, orig_client_order_id=client_order_id)
             except Exception:
                 raise
+
+    def market_buy_qty(self, symbol, quantity, client_order_id):
+        try:
+            return self._signed("POST", "/api/v3/order", {
+                "symbol": symbol, "side": "BUY", "type": "MARKET", "quantity": quantity,
+                "newClientOrderId": client_order_id, "newOrderRespType": "FULL"})
+        except Exception as exc:
+            if order_definitely_rejected(exc):
+                raise
+            return self.order(symbol, orig_client_order_id=client_order_id)
+
+    def stop_loss_sell(self, symbol, quantity, stop_price, client_order_id):
+        return self._signed("POST", "/api/v3/order", {
+            "symbol": symbol, "side": "SELL", "type": "STOP_LOSS",
+            "quantity": quantity, "stopPrice": stop_price,
+            "newClientOrderId": client_order_id, "newOrderRespType": "RESULT"})
+
+    def cancel_order(self, symbol, client_order_id):
+        return self._signed("DELETE", "/api/v3/order", {
+            "symbol": symbol, "origClientOrderId": client_order_id})
 
     def market_sell_qty(self, symbol: str, quantity: str, client_order_id: str):
         p = {
@@ -372,6 +428,10 @@ def load_rules(info: dict) -> Dict[str, SymbolRules]:
             max_qty=D(lot.get("maxQty", "999999999")),
             min_notional=D(min_notional),
             quote_order_qty_market_allowed=bool(s.get("quoteOrderQtyMarketAllowed", True)),
+            stop_loss_allowed="STOP_LOSS" in s.get("orderTypes", []),
+            market_step_size=D(fmap.get("MARKET_LOT_SIZE", {}).get("stepSize", "0")),
+            market_min_qty=D(fmap.get("MARKET_LOT_SIZE", {}).get("minQty", "0")),
+            market_max_qty=D(fmap.get("MARKET_LOT_SIZE", {}).get("maxQty", "999999999")),
         )
     return out
 
@@ -526,7 +586,8 @@ def scan_market_detailed(
                     "signal_close_ms": (now_ms // 86_400_000) * 86_400_000 - 1,
                     "strategy_version": scfg.strategy_version,
                     "position_strategy_version": held_rules.get("strategy_version"),
-                    "adx_threshold": scfg.adx_threshold,
+                    "adx_threshold": scfg.adx_threshold, "adx_inclusive": True,
+                    "atr_stop_enabled": held_rules.get("atr_stop_enabled", False) if sym in holding else scfg.atr_stop_enabled,
                     "entry_period": scfg.entry_period, "exit_period": held_rules.get("exit_period", scfg.exit_period)})
                 if evaluation.signal is not None:
                     sig = evaluation.signal
@@ -588,6 +649,9 @@ def scan_market_detailed(
 
 
 def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: EventLogger, cfg: BotConfig, market=None, rules=None):
+    from atr_protection import maintain_stop, recover_entries
+    if market is not None:
+        recover_entries(exec_client, market, state, cfg, logger, rules or {})
     changed = False
     for sym, pd in list(state.get("open_positions", {}).items()):
         pos = Position(**pd)
@@ -595,6 +659,12 @@ def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: Eve
             try:
                 close_position(Signal(**pos.pending_exit_signal), market, exec_client,
                                rules or {}, state, cfg, logger)
+            except Exception as exc:
+                logger.emit("POSITION_SYNC_ERROR", symbol=sym, error=str(exc))
+            continue
+        if pos.atr_stop_enabled and market is not None:
+            try:
+                maintain_stop(exec_client, market, state, cfg, logger, rules or {}, sym)
             except Exception as exc:
                 logger.emit("POSITION_SYNC_ERROR", symbol=sym, error=str(exc))
             continue
@@ -659,6 +729,10 @@ def sync_positions(exec_client: TestnetExecutionClient, state: dict, logger: Eve
 
 
 def allowed_to_trade(state: dict, cfg: BotConfig, logger: EventLogger) -> bool:
+    if state.get("pending_entries") or any(p.get("atr_stop_enabled") and
+            p.get("native_stop_state") != "NEW" for p in state.get("open_positions", {}).values()):
+        logger.emit("NEW_ENTRIES_BLOCKED", reason="entry or protective stop needs reconciliation")
+        return False
     if Path(cfg.kill_switch_file).exists():
         logger.emit("NEW_ENTRIES_BLOCKED", reason="kill switch file exists", file=cfg.kill_switch_file)
         return False
@@ -724,7 +798,11 @@ def place_signal(
     if not rule or rule.quote_asset != cfg.quote_asset:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="symbol unavailable on Spot Testnet", signal_key=key)
         return
-    if not rule.quote_order_qty_market_allowed:
+    if sig.atr_stop_enabled and (not rule.stop_loss_allowed or rule.tick_size <= 0):
+        logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key,
+                    reason="Testnet symbol lacks a supported native STOP_LOSS or valid tick")
+        return
+    if not sig.atr_stop_enabled and not rule.quote_order_qty_market_allowed:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="testnet symbol disallows quoteOrderQty market buy", signal_key=key)
         return
 
@@ -776,7 +854,13 @@ def place_signal(
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="invalid ATR stop distance", signal_key=key)
         return
 
-    # Spec sizing: qty = (risk_pct x equity) / (2 x ATR); buy by quote notional.
+    if sig.atr_stop_enabled:
+        stop_distance = float(max(rule.tick_size, nearest_tick(stop_distance, rule.tick_size)))
+        if stop_distance >= sig.entry:
+            logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="ATR stop distance must be below signal price")
+            return
+
+    # Risk budget uses equity; the fixed ATR strategy submits rounded base quantity.
     risk_budget = min(equity, equity * cfg.risk_per_trade_pct / 100.0)
     if risk_budget <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no per-trade risk budget", signal_key=key)
@@ -786,39 +870,88 @@ def place_signal(
     if not math.isfinite(live_ask) or live_ask <= 0:
         logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="invalid entry ask")
         return
-    qty = risk_budget / stop_distance
-    quote_notional = qty * live_ask
-    # No arbitrary reserve, fixed dollar cap or leverage. Binance spot BUY
-    # commissions normally come from received base or the fee asset (e.g. BNB).
-    quote_notional = min(quote_notional, available_quote)
-    if quote_notional <= 0:
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no order budget", signal_key=key)
-        return
-    if quote_notional < float(rule.min_notional):
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="calculated position below min notional", notional=quote_notional, signal_key=key)
-        return
-
-    quote_dec = floor_step(quote_notional, Decimal("0.00000001"))
-    if quote_dec <= 0:
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="position rounds to zero", signal_key=key)
-        return
-    if quote_dec < rule.min_notional:
-        logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="available balance below min notional", signal_key=key)
-        return
-
     entry_cid = deterministic_id("dce", key)
-    logger.emit(
-        "ENTRY_SUBMIT",
-        symbol=sig.symbol, signal_key=key, signal_entry=sig.entry, live_ask=live_ask,
-        atr=sig.atr, stop_distance=stop_distance, risk_budget_usdt=risk_budget,
-        sizing_equity_usdt=equity, unrealized_pnl_usdt=unrealized_pnl,
-        available_quote_usdt=available_quote,
-        quote_order_qty=fmt_dec(quote_dec),
-    )
-    entry = exec_client.market_buy_quote(sig.symbol, fmt_dec(quote_dec), entry_cid)
+    if not sig.atr_stop_enabled:
+        qty = risk_budget / stop_distance
+        quote_notional = qty * live_ask
+        # No arbitrary reserve, fixed dollar cap or leverage. Binance spot BUY
+        # commissions normally come from received base or the fee asset (e.g. BNB).
+        quote_notional = min(quote_notional, available_quote)
+        if quote_notional <= 0:
+            logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="no order budget", signal_key=key)
+            return
+        if quote_notional < float(rule.min_notional):
+            logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="calculated position below min notional", notional=quote_notional, signal_key=key)
+            return
+
+        quote_dec = floor_step(quote_notional, Decimal("0.00000001"))
+        if quote_dec <= 0:
+            logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="position rounds to zero", signal_key=key)
+            return
+        if quote_dec < rule.min_notional:
+            logger.emit("TRADE_REJECTED", symbol=sig.symbol, reason="available balance below min notional", signal_key=key)
+            return
+
+        logger.emit(
+            "ENTRY_SUBMIT",
+            symbol=sig.symbol, signal_key=key, signal_entry=sig.entry, live_ask=live_ask,
+            atr=sig.atr, stop_distance=stop_distance, risk_budget_usdt=risk_budget,
+            sizing_equity_usdt=equity, unrealized_pnl_usdt=unrealized_pnl,
+            available_quote_usdt=available_quote,
+            quote_order_qty=fmt_dec(quote_dec),
+        )
+    if sig.atr_stop_enabled:
+        # Fixed base quantity as in Pine. The current Testnet ask additionally
+        # limits affordability; fees are reserved, then exchange lots round down.
+        from atr_protection import market_quantity
+        testnet_ask = float(exec_client.book_ticker(sig.symbol)["askPrice"])
+        if not math.isfinite(testnet_ask) or testnet_ask <= 0:
+            raise ValueError("Invalid Testnet ask")
+        price = max(sig.entry, testnet_ask)
+        order_qty = market_quantity(min(risk_budget/stop_distance,
+            min(equity, available_quote)/(price*(1+sig.entry_fee_reserve_pct/100))), rule)
+        if order_qty < max(rule.min_qty, rule.market_min_qty) or order_qty*D(testnet_ask) < rule.min_notional:
+            logger.emit("TRADE_REJECTED", symbol=sig.symbol, signal_key=key, reason="cash/risk-sized quantity below exchange minimum")
+            return
+        logger.emit("ENTRY_SUBMIT", symbol=sig.symbol, signal_key=key,
+                    signal_entry=sig.entry, testnet_ask=testnet_ask,
+                    quantity=fmt_dec(order_qty), atr=sig.atr, stop_distance=stop_distance,
+                    sizing_equity_usdt=equity, risk_budget_usdt=risk_budget,
+                    entry_fee_reserve_pct=sig.entry_fee_reserve_pct,
+                    available_quote_usdt=available_quote)
+        intent = {"signal":sig.to_dict(), "client_id":entry_cid,
+                  "stop_distance":stop_distance, "live_ask":testnet_ask, "quantity":fmt_dec(order_qty)}
+        state.setdefault("pending_entries", {})[entry_cid] = intent
+        save_state(cfg.state_file, state)  # durable BEFORE sending a buy
+        try:
+            entry = exec_client.market_buy_qty(sig.symbol, fmt_dec(order_qty), entry_cid)
+        except Exception as exc:
+            if order_definitely_rejected(exc):
+                state['pending_entries'].pop(entry_cid, None)
+                save_state(cfg.state_file, state)
+                logger.emit("ENTRY_FAILED", symbol=sig.symbol, signal_key=key, reason=str(exc))
+                return
+            raise
+        if entry.get("status") not in {"FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
+            logger.emit("ENTRY_PENDING", symbol=sig.symbol, signal_key=key)
+            return
+    else:
+        entry = exec_client.market_buy_quote(sig.symbol, fmt_dec(quote_dec), entry_cid)
+    finish_entry(sig, entry, entry_cid, stop_distance, live_ask, market, exec_client, rules, state, cfg, logger)
+
+
+def finish_entry(sig, entry, entry_cid, stop_distance, live_ask, market, exec_client, rules, state, cfg, logger):
+    """Shared immediate/restart fill recording. Never submits another BUY."""
+    key = signal_key(sig)
+    rule = rules[sig.symbol]
     executed_qty = float(entry.get("executedQty", 0) or 0)
     cumulative_quote = float(entry.get("cummulativeQuoteQty", 0) or 0)
+    if sig.atr_stop_enabled and (not math.isfinite(executed_qty) or not math.isfinite(cumulative_quote)
+            or executed_qty < 0 or (executed_qty > 0 and cumulative_quote <= 0)):
+        raise ValueError("Entry fill values unverified; retaining pending entry for reconciliation")
     if executed_qty <= 0:
+        state.get("pending_entries", {}).pop(entry_cid, None)
+        save_state(cfg.state_file, state)
         logger.emit("ENTRY_FAILED", symbol=sig.symbol, response=entry, signal_key=key)
         return
     avg_fill = cumulative_quote / executed_qty if cumulative_quote > 0 else live_ask
@@ -853,7 +986,7 @@ def place_signal(
     position_qty_raw = max(0.0, executed_qty - commission_base)
     position_qty = floor_step(position_qty_raw, rule.step_size)
 
-    if position_qty < rule.min_qty or position_qty > rule.max_qty:
+    if not sig.atr_stop_enabled and (position_qty < rule.min_qty or position_qty > rule.max_qty):
         # Emergency flatten any filled exposure rather than hold an unusable lot.
         emergency_qty = floor_step(executed_qty, rule.step_size)
         if emergency_qty >= rule.min_qty:
@@ -861,6 +994,10 @@ def place_signal(
         logger.emit("EMERGENCY_FLATTEN", symbol=sig.symbol, reason="position quantity invalid", signal_key=key)
         return
 
+    if sig.atr_stop_enabled and position_qty < rule.min_qty:
+        # Retain even an unusable/dust exposure and its cost rather than silently
+        # losing the filled position. Protection handling reports the failure.
+        position_qty = D(position_qty_raw)
     pos = Position(
         symbol=sig.symbol,
         signal_key=key,
@@ -878,12 +1015,19 @@ def place_signal(
         entry_fee_usdt=fees["total_usdt"],
         fee_accounting_complete=fees["complete"],
         entry_fee_details=fees["details"],
+        atr_stop_enabled=sig.atr_stop_enabled,
+        fixed_stop_distance=stop_distance if sig.atr_stop_enabled else None,
+        fixed_stop_price=float(nearest_tick(avg_fill-stop_distance, rule.tick_size)) if sig.atr_stop_enabled else None,
     )
     state["open_positions"][sig.symbol] = asdict(pos)
+    state.get("pending_entries", {}).pop(entry_cid, None)
     save_state(cfg.state_file, state)
     if not fees["complete"]:
         pause_for_accounting(cfg, logger, sig.symbol, fees)
     logger.emit("POSITION_OPENED", **asdict(pos))
+    if sig.atr_stop_enabled:
+        from atr_protection import maintain_stop
+        maintain_stop(exec_client, market, state, cfg, logger, rules, sig.symbol)
 
 
 def pause_for_accounting(cfg, logger, symbol, fees):
@@ -930,6 +1074,14 @@ def close_position(
         logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key, reason="symbol rules unavailable on Spot Testnet")
         return
 
+    if pos.get("atr_stop_enabled"):
+        from atr_protection import cancel_for_exit
+        if not cancel_for_exit(exec_client, market, state, cfg, logger, rules, sig):
+            return
+        pos = state.get("open_positions", {}).get(sig.symbol)
+        if not pos:
+            return
+
     exit_ids = pos.get("exit_order_ids", [])
     cid = pos.get("pending_exit_client_id")
     if cid:
@@ -940,7 +1092,11 @@ def close_position(
         account = exec_client.account()
         base_free = account_free(account, rule.base_asset)
         sell_qty = floor_step(min(float(pos.get("quantity", 0)), base_free), rule.step_size)
-        if sell_qty < rule.min_qty:
+        if pos.get("atr_stop_enabled"):
+            from atr_protection import market_quantity
+            sell_qty = market_quantity(sell_qty, rule)
+        minimum = max(rule.min_qty, rule.market_min_qty) if pos.get("atr_stop_enabled") else rule.min_qty
+        if sell_qty < minimum or sell_qty <= 0:
             logger.emit("EXIT_ERROR", symbol=sig.symbol, signal_key=key,
                         reason="nothing sellable: position below min quantity or base balance missing",
                         quantity=pos.get("quantity"), base_free=base_free)
@@ -975,6 +1131,19 @@ def close_position(
                     reason="exit fill could not be verified; position retained", response=sell)
         return
 
+    account_exit_fill(sig, sell, market, exec_client, rules, state, cfg, logger)
+
+
+def account_exit_fill(sig, sell, market, exec_client, rules, state, cfg, logger):
+    """Account a terminal sell once, shared by channel and native stop exits."""
+    key = signal_key(sig)
+    pos = state["open_positions"][sig.symbol]
+    rule = rules[sig.symbol]
+    exit_ids = pos.get("exit_order_ids", [])
+    executed_qty = float(sell.get("executedQty", 0) or 0)
+    cumulative_quote = float(sell.get("cummulativeQuoteQty", 0) or 0)
+    if executed_qty <= 0 or cumulative_quote <= 0:
+        raise ValueError("Terminal sell lacks verified execution values")
     order_id = int(sell.get("orderId", 0) or 0)
     if order_id in exit_ids:
         logger.emit("EXIT_ERROR", symbol=sig.symbol, reason="exit fill already accounted")
@@ -992,7 +1161,13 @@ def close_position(
     exit_fees = float(pos.get("exit_fee_usdt", 0)) + fees['total_usdt']
     complete = pos.get('fee_accounting_complete') is not False and fees['complete']
     remaining = max(0.0, float(pos.get("quantity", 0)) - executed_qty - fees['base_quantity'])
-    if floor_step(remaining, rule.step_size) >= rule.min_qty:
+    remaining_lot = floor_step(remaining, rule.step_size)
+    minimum = rule.min_qty
+    if pos.get("atr_stop_enabled"):
+        from atr_protection import market_quantity
+        remaining_lot = market_quantity(remaining, rule)
+        minimum = max(rule.min_qty, rule.market_min_qty)
+    if remaining_lot > 0 and remaining_lot >= minimum:
         pos.update(quantity=remaining, entry_cost_usdt=original_cost,
                    exit_proceeds_usdt=total_proceeds, exit_quantity=closed_qty,
                    exit_quote_usdt=total_quote, exit_fee_usdt=exit_fees,
@@ -1008,10 +1183,12 @@ def close_position(
     risk_usdt = float(pos.get("risk_usdt") or 0.0)
     result_r = pnl_usdt / risk_usdt if risk_usdt > 0 else 0.0
     pnl_pct = pnl_usdt / original_cost * 100.0 if original_cost > 0 else 0.0
-    closed_at = datetime.now(timezone.utc)
+    fill_time_ms = sell.get("updateTime") or sell.get("transactTime")
+    closed_at = datetime.fromtimestamp(float(fill_time_ms)/1000, tz=timezone.utc) if fill_time_ms else datetime.now(timezone.utc)
     record = {
         "day": closed_at.date().isoformat(), "symbol": sig.symbol, "r": result_r,
-        "outcome": "CHANNEL_EXIT", "closed_at": closed_at.isoformat(),
+        "outcome": pos.get("exit_reason", "CHANNEL_EXIT"), "closed_at": closed_at.isoformat(),
+        "fixed_stop_price": pos.get("fixed_stop_price"), "fixed_stop_distance": pos.get("fixed_stop_distance"),
         # The trade row is keyed by the entry signal; the exit signal gets its own id.
         "signal_key": pos.get("signal_key") or key, "exit_signal_key": key,
         "opened_at": pos.get("opened_at"),

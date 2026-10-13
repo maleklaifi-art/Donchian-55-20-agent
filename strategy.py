@@ -31,8 +31,11 @@ class Candle:
 @dataclass
 class DonchianConfig:
     adx_period: int = 14
-    adx_threshold: float = 25.0  # strict >; entry only
-    strategy_version: str = "donchian_55_20_adx25_v1"
+    adx_threshold: float = 25.0  # inclusive >=; entry only
+    adx_smoothing: int = 14
+    atr_stop_enabled: bool = True
+    entry_fee_reserve_pct: float = 0.25
+    strategy_version: str = "donchian_55_20_adx25_atr_stop_v2"
     entry_period: int = 55          # entry channel: highest high of previous N days
     exit_period: int = 20           # exit channel: lowest low of previous N days
     atr_period: int = 20            # Wilder ATR on daily candles
@@ -52,11 +55,13 @@ class Signal:
     entry_channel: float            # highest high of the previous entry_period days
     exit_channel: float             # lowest low of the previous exit_period days
     atr: float                      # Wilder ATR(atr_period) on daily candles
-    stop_distance: float            # sizing distance = multiplier x ATR (no stop order is placed)
+    stop_distance: float            # signal ATR distance; execution rounds to tick
     universe: str = ""
     strategy_version: str = "donchian_55_20_adx25_v1"
     adx: Optional[float] = None
     exit_period: int = 20
+    atr_stop_enabled: bool = False  # old serialized signals remain channel-only
+    entry_fee_reserve_pct: float = 0.25
 
     def to_dict(self):
         return asdict(self)
@@ -140,14 +145,15 @@ def wilders_atr(daily: List[Candle], period: int) -> Optional[float]:
     return atr
 
 
-def wilders_adx_series(daily: List[Candle], period: int = 14):
-    """Wilder DMI/ADX with SMA seeds; first ADX at index 2*period-1.
+def wilders_adx_series(daily: List[Candle], period: int = 14, smoothing=None):
+    """Wilder DMI/ADX with SMA seeds; first ADX at DI length + smoothing - 1.
 
     The first true range for DMI uses bar 1 and bar 0's close. Zero movement
     yields DX=0. All inputs must be completed, contiguous candles.
     """
+    smoothing = period if smoothing is None else smoothing
     result = [None] * len(daily)
-    if period < 2 or len(daily) < 2 * period:
+    if period < 1 or smoothing < 1 or len(daily) < period + smoothing:
         return result
     tr, plus, minus = [], [], []
     for prev, bar in zip(daily, daily[1:]):
@@ -166,16 +172,16 @@ def wilders_adx_series(daily: List[Candle], period: int = 14):
         dx = 100 * abs(sp-sm)/(sp+sm) if st > 0 and sp+sm > 0 else 0.0
         if adx is None:
             seed.append(dx)
-            if len(seed) == period:
-                adx = sum(seed)/period
+            if len(seed) == smoothing:
+                adx = sum(seed)/smoothing
         else:
-            adx = (adx*(period-1)+dx)/period
+            adx = (adx*(smoothing-1)+dx)/smoothing
         result[i] = adx
     return result
 
 
-def wilders_adx(daily: List[Candle], period: int = 14):
-    values = wilders_adx_series(daily, period)
+def wilders_adx(daily: List[Candle], period: int = 14, smoothing=None):
+    values = wilders_adx_series(daily, period, smoothing)
     return values[-1] if values else None
 
 
@@ -238,7 +244,7 @@ def evaluate_donchian(
     if atr is None or not (math.isfinite(atr) and atr > 0):
         return reject("Data", f"ATR({cfg.atr_period}) is unavailable")
 
-    adx = wilders_adx(closed, cfg.adx_period)
+    adx = wilders_adx(closed, cfg.adx_period, cfg.adx_smoothing)
     context = dict(entry_channel=entry_channel, exit_channel=exit_channel, atr=atr, holding=holding, adx=adx)
     closed_at = datetime.fromtimestamp(signal_day.close_time / 1000, tz=timezone.utc).isoformat()
 
@@ -256,6 +262,7 @@ def evaluate_donchian(
                 stop_distance=cfg.atr_multiplier * atr,
                 universe=universe,
                 strategy_version=cfg.strategy_version, adx=adx, exit_period=cfg.exit_period,
+                atr_stop_enabled=cfg.atr_stop_enabled, entry_fee_reserve_pct=cfg.entry_fee_reserve_pct,
             ), **context)
         return reject(
             "Held",
@@ -266,8 +273,8 @@ def evaluate_donchian(
     if signal_day.close > entry_channel:
         if adx is None or not math.isfinite(adx):
             return reject("Data", f"ADX({cfg.adx_period}) is unavailable", **context)
-        if adx <= cfg.adx_threshold:
-            return reject("ADX", f"Breakout confirmed but ADX({cfg.adx_period}) {adx:.4f} must be > {cfg.adx_threshold:g}", **context)
+        if adx < cfg.adx_threshold:
+            return reject("ADX", f"Breakout confirmed but ADX({cfg.adx_period}) {adx:.4f} must be >= {cfg.adx_threshold:g}", **context)
         if not within_entry_grace(now_ms, cfg.entry_grace_minutes):
             return reject(
                 "Entry",
@@ -286,6 +293,7 @@ def evaluate_donchian(
             stop_distance=cfg.atr_multiplier * atr,
             universe=universe,
             strategy_version=cfg.strategy_version, adx=adx, exit_period=cfg.exit_period,
+            atr_stop_enabled=cfg.atr_stop_enabled, entry_fee_reserve_pct=cfg.entry_fee_reserve_pct,
         ), **context)
     return reject(
         "Entry",

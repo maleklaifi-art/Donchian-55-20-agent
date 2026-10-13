@@ -199,8 +199,39 @@ class ResearchStore:
                         outcomes['channel_exit'] = {'exit_time_ms': bars[i+1].open_time,
                             'net_pct': (sell*(1-fee)/(buy*(1+fee))-1)*100}
                         break
+            # Separate from the channel-only diagnostic: approximate the recorded
+            # new ATR strategy with daily OHLC, gaps and costs. No tick metadata is
+            # available here, so explicitly label this as an unrounded estimate.
+            needs_stop = bool(p.get('atr_stop_enabled')) and not p.get('holding')
+            atr = p.get('atr')
+            if needs_stop and atr and start_idx is not None and 'strategy_exit' not in outcomes:
+                distance = p['config']['rules']['atr_multiplier'] * atr
+                stop_price = buy - distance
+                if 0 < stop_price < buy:
+                    channel_pending = False
+                    for i in range(start_idx, len(bars)):
+                        bar = bars[i]
+                        if bar.close_time >= now_ms:
+                            break
+                        reason = None
+                        if bar.open <= stop_price:
+                            price, reason = bar.open, 'ATR_STOP_GAP'
+                        elif channel_pending:
+                            price, reason = bar.open, 'CHANNEL_EXIT'
+                        elif bar.low <= stop_price:
+                            price, reason = stop_price, 'ATR_STOP'
+                        if reason:
+                            outcomes['strategy_exit'] = {
+                                'exit_day_ms': bar.open_time, 'reason': reason,
+                                'stop_price': stop_price,
+                                'net_pct': (price*(1-cost['slip'])*(1-fee)/(buy*(1+fee))-1)*100,
+                                'assumption': 'Daily OHLC estimate; unrounded ATR distance; intraday time unknown',
+                            }
+                            break
+                        channel_pending = i >= period and bar.close < min(b.low for b in bars[i-period:i])
             outcomes['reference_open'] = first.open
-            outcomes['complete'] = '30' in outcomes and 'channel_exit' in outcomes
+            outcomes['complete'] = ('30' in outcomes and 'channel_exit' in outcomes
+                                    and (not needs_stop or 'strategy_exit' in outcomes))
             with self.db._lock, self.db._connect() as c:
                 c.execute('UPDATE daily_decisions SET outcomes=? WHERE id=?',
                           (json.dumps(outcomes, allow_nan=False), r['id']))

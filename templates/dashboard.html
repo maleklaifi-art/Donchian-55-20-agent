@@ -149,7 +149,8 @@ button,input,select{font:inherit}
       </div>
     </div>
     <div id="closedPanel" class="table-wrap"></div>
-    <div id="entryPanel" class="table-wrap hidden"></div>
+    <p class="research-note">Entry sizes and stops use signal-close prices and current account equity/cash. Each row is an independent estimate; actual orders share available cash and stops use actual fills.</p>
+      <div id="entryPanel" class="table-wrap hidden"></div>
     <div id="exitPanel" class="table-wrap hidden"></div>
     <div id="noactionPanel" class="table-wrap hidden"></div>
   </section>
@@ -166,7 +167,7 @@ button,input,select{font:inherit}
         <label><input id="decisionSkipped" type="checkbox"> Skipped entries only</label>
         <button id="decisionPrev" class="btn secondary" type="button">Previous</button><button id="decisionNext" class="btn secondary" type="button">Next</button>
       </div>
-      <p class="research-note">Every daily decision is retained, including no breakout, ADX rejection, held positions and data errors. Returns start at the next daily open. Peak rise and worst fall describe the path; they are not realized profits. “Channel exit” is a hypothetical unit trade with costs, not a funded portfolio. — means the observation is not ready.</p>
+      <p class="research-note">Every daily decision is retained, including no breakout, ADX rejection, held positions and data errors. Returns start at the next daily open. Peak rise and worst fall describe the path; they are not realized profits. “Channel only” ignores stops; “ATR/channel estimate” includes the recorded fixed ATR stop using daily OHLC and no tick rounding. These are hypothetical unit trades with costs, not actual fills or a funded portfolio. — means the observation is not ready.</p>
     </div>
     <div id="decisionsTable" class="table-wrap"></div>
   </section>
@@ -185,14 +186,16 @@ button,input,select{font:inherit}
       <div class="field"><label for="setRiskPct">Risk per trade (% of equity)</label><input id="setRiskPct" type="number" min="0.01" max="10" step="0.01"></div>
       <div class="field"><label for="setEntryPeriod">Entry channel (days)</label><input id="setEntryPeriod" type="number" min="10" max="500"></div>
       <div class="field"><label for="setExitPeriod">Exit channel (days)</label><input id="setExitPeriod" type="number" min="5" max="500"></div>
-      <div class="field"><label for="setAdxPeriod">ADX period (entry only)</label><input id="setAdxPeriod" type="number" min="2" max="100"></div>
-      <div class="field"><label for="setAdxThreshold">Entry ADX must be strictly above</label><input id="setAdxThreshold" type="number" min="0" max="100" step="0.1"></div>
+      <div class="field"><label for="setAdxPeriod">DI length (entry only)</label><input id="setAdxPeriod" type="number" min="2" max="100"></div>
+      <div class="field"><label for="setAdxSmoothing">ADX smoothing</label><input id="setAdxSmoothing" type="number" min="1" max="100"></div>
+      <div class="field"><label for="setFeeReserve">Entry fee reserve (%)</label><input id="setFeeReserve" type="number" min="0" max="10" step="0.01"></div>
+      <div class="field"><label for="setAdxThreshold">Minimum entry ADX (≥)</label><input id="setAdxThreshold" type="number" min="0" max="100" step="0.1"></div>
       <div class="field"><label for="setAtrPeriod">ATR period</label><input id="setAtrPeriod" type="number" min="2" max="200"></div>
-      <div class="field"><label for="setAtrMult">ATR multiplier (sizing distance)</label><input id="setAtrMult" type="number" min="0.1" max="20" step="0.1"></div>
+      <div class="field"><label for="setAtrMult">ATR multiplier (fixed stop distance)</label><input id="setAtrMult" type="number" min="0.1" max="20" step="0.1"></div>
       <div class="field"><label for="setHistory">History fetch page size</label><input id="setHistory" type="number" min="60" max="1000"></div>
       <div class="field"><label for="setGrace">Entry grace (min after 00:00 UTC)</label><input id="setGrace" type="number" min="1" max="1440"></div>
       <div class="field"><label for="setWorkers">Concurrent workers</label><input id="setWorkers" type="number" min="1" max="100"></div>
-      <p>Sizing: qty = (risk % × equity) / (2 × ATR). Equity includes open P&amp;L. No fixed position-value cap; available cash limits purchases. Long-only spot, one position per symbol, no stop orders — positions close only when the daily close breaks the 20-day low. No daily loss cutoff. ATR uses continuous daily history. Orders need available Testnet funds; new trades include actual fees. Legacy records stay unchanged.</p>
+      <p>New trades: daily close above the previous entry channel and ADX ≥ the minimum. Fixed stop = actual fill minus signal ATR × multiplier, rounded to the exchange tick; it never trails. Also exit below the daily exit channel. Size = equity × risk% / frozen stop distance, rounded down and capped by free cash including the entry fee reserve. No fixed $100 cap. Fees, gaps and slippage can increase losses beyond planned risk. Existing trades keep their recorded rules.</p>
 
       <div class="field"><label for="setUniverseName">List name</label><input id="setUniverseName" type="text" placeholder="Core 10"></div>
       <div class="field" style="grid-column:span 2"><label for="setUniverseSymbols">Coins (comma separated, USDT pairs)</label><input id="setUniverseSymbols" type="text" placeholder="BTCUSDT, ETHUSDT, …"></div>
@@ -226,7 +229,7 @@ button,input,select{font:inherit}
   const date = v => !v ? '—' : new Date(v).toLocaleString();
   const cls = v => Number(v)>0?'good':Number(v)<0?'bad':'';
   const esc = s => String(s ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-  const ruleLine = s => `${s?.entry_period ?? 55}/${s?.exit_period ?? 20} Donchian · ATR(${s?.atr_period ?? 20}) × ${s?.atr_multiplier ?? 2} · risk ${s?.risk_per_trade_pct ?? 1}% · ${s?.schedule || 'Daily at 00:00 UTC'} · ADX(${s?.adx_period ?? 14}) > ${s?.adx_threshold ?? 25}`;
+  const ruleLine = s => `${s?.entry_period ?? 55}/${s?.exit_period ?? 20} Donchian · ATR(${s?.atr_period ?? 20}) × ${s?.atr_multiplier ?? 2} · risk ${s?.risk_per_trade_pct ?? 1}% · ${s?.schedule || 'Daily at 00:00 UTC'} · ADX(${s?.adx_period ?? 14},${s?.adx_smoothing ?? 14}) ≥ ${s?.adx_threshold ?? 25} · fixed ATR stop`;
   const payload = r => { try { return JSON.parse(r.payload_json || '{}'); } catch (e) { return {}; } };
 
   function setMoney(id,v){ const el=$(id); el.textContent=money(v); el.className='v '+cls(v); }
@@ -242,11 +245,13 @@ button,input,select{font:inherit}
         <div><span>Entry (fill)</span><b>${num(t.entry_price,8)}</b></div><div><span>Current</span><b>${num(t.current_price,8)}</b></div>
         <div><span>Entry channel (at entry)</span><b>${num(t.entry_channel,8)}</b></div><div><span>Exit channel (${num(t.exit_period??20,0)}d low)</span><b>${num(t.exit_channel,8)}</b></div>
         <div><span>Distance to exit channel</span><b>${t.distance_to_exit_pct==null?'—':pct(t.distance_to_exit_pct)}</b></div><div><span>ATR at entry</span><b>${num(t.atr,8)}</b></div>
-        <div><span>Risk</span><b>${money(t.risk_usdt)}</b></div><div><span>Quantity</span><b>${num(t.quantity,8)}</b></div>
+        <div><span>Fixed stop (actual fill)</span><b>${t.atr_stop_enabled?num(t.fixed_stop_price,8):'Original rules'}</b></div><div><span>Stop status</span><b>${t.atr_stop_enabled?esc(t.native_stop_state||'Pending'):'No added ATR stop'}</b></div>
+        <div><span>Planned price risk</span><b>${money(t.risk_usdt)}</b></div><div><span>Quantity</span><b>${num(t.quantity,8)}</b></div>
         <div><span>Opened</span><b>${date(t.opened_at)}</b></div><div><span>Universe</span><b>${esc(t.universe || state?.settings?.active_universe || '—')}</b></div>
       </div>
+      ${t.native_stop_error?`<p class="bad">${esc(t.native_stop_error)}</p>`:''}
       <div class="pnl ${cls(t.unrealized_pnl_usdt)}">${money(t.unrealized_pnl_usdt)} <span style="font-size:12px">(${pct(t.unrealized_pct)})</span></div>
-      <div class="ruleline"><span class="tag pass">LONG-ONLY SPOT</span><span class="tag">No stop order</span><span class="tag">Exit: daily close &lt; ${num(t.exit_period??20,0)}-day low</span><span class="tag">${esc(t.strategy_version||'legacy_donchian')}</span><span class="tag">Sizing: risk% / (2 × ATR)</span></div>
+      <div class="ruleline"><span class="tag pass">LONG-ONLY SPOT</span><span class="tag">${t.atr_stop_enabled?'Fixed ATR stop · not trailing':'Original exit rules · no added stop'}</span><span class="tag">Exit: daily close &lt; ${num(t.exit_period??20,0)}-day low</span><span class="tag">${esc(t.strategy_version||'legacy_donchian')}</span><span class="tag">Sizing: risk% / (2 × ATR)</span></div>
     </article>`).join('');
   }
 
@@ -258,7 +263,7 @@ button,input,select{font:inherit}
   function renderClosed(rows){
     $('closedPanel').innerHTML=table([
       ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],
-      ['Outcome',r=>`<span class="${cls(r.pnl_usdt)}"><b>${r.outcome==='CHANNEL_EXIT'?'Channel exit':esc(r.outcome||'—')}</b></span>`],
+      ['Outcome',r=>`<span class="${cls(r.pnl_usdt)}"><b>${r.outcome==='CHANNEL_EXIT'?'Channel exit':r.outcome==='ATR_STOP'?'ATR stop':r.outcome==='PROTECTION_FAILURE'?'Protection failure exit':esc(r.outcome||'—')}</b></span>`],
       ['Entry',r=>num(r.entry_price,8)],['Exit',r=>num(r.exit_price,8)],
       ['Exit channel',r=>num(payload(r).exit_channel ?? r.sl,8)],
       ['Quantity',r=>num(r.quantity,8)],
@@ -273,7 +278,7 @@ button,input,select{font:inherit}
       ['Symbol',r=>`<b>${esc(r.symbol)}</b>`],['Signal close',r=>date(r.close_time_utc)],
       ['Daily close',r=>num(r.entry,8)],['55-day high',r=>`<span class="good"><b>${num(r.entry_channel,8)}</b></span>`],
       ['20-day low',r=>num(r.exit_channel,8)],['ATR(20)',r=>num(r.atr,8)],['ADX',r=>num(r.adx,2)],
-      ['Sizing distance (2×ATR)',r=>num(r.stop_distance,8)],['Universe',r=>esc(r.universe||'—')]
+      ['Frozen stop distance',r=>num(r.stop_distance,8)],['Est. new quantity',r=>num(r.estimated_quantity,8)],['Est. USDT value',r=>num(r.estimated_value,2)],['Est. stop at signal close',r=>num(r.estimated_stop,8)],['Universe',r=>esc(r.universe||'—')]
     ],rows);
   }
 
@@ -306,6 +311,8 @@ button,input,select{font:inherit}
     $('setExitPeriod').value=s.exit_period;
     $('setAdxPeriod').value=s.adx_period ?? 14;
     $('setAdxThreshold').value=s.adx_threshold ?? 25;
+    $('setAdxSmoothing').value=s.adx_smoothing ?? 14;
+    $('setFeeReserve').value=s.entry_fee_reserve_pct ?? 0.25;
     $('setAtrPeriod').value=s.atr_period;
     $('setAtrMult').value=s.atr_multiplier;
     $('setHistory').value=s.daily_history_bars;
@@ -354,10 +361,11 @@ button,input,select{font:inherit}
     const items=[
       ['Execution',m.execution_ready?'<span class="good"><b>READY</b></span>':`<span class="bad"><b>NOT READY</b></span> ${esc(m.execution_error||'')}`],
       ['New entries',m.new_entries_enabled?'<span class="good"><b>ENABLED</b></span>':'<span class="warnc"><b>PAUSED</b></span>'],
+      ['Pending entry reconciliation',esc((m.pending_entry_symbols||[]).join(', ')||'None')],
       ['Last scan',date(m.last_scan_completed)],['Scan running',m.scan_in_progress?'Yes':'No'],['Last position sync',date(m.last_position_sync)],
       ['Scan summary',`${d.scan.coins_scanned} scanned · ${d.scan.entry_count||0} entry signals · ${d.scan.exit_count||0} exit signals · ${d.scan.filtered.length} no action · ${d.scan.error_count} errors · ${num(d.scan.duration_seconds,2)}s`],
       ['Schedule','Daily at 00:00 UTC + '+num(r.entry_grace_minutes,0)+' min grace for entries; exits on every daily scan'],
-      ['Strategy',`Donchian ${r.entry_period}/${r.exit_period} · ATR(${r.atr_period}) × ${r.atr_multiplier} · long-only spot · exit on daily close below the ${r.exit_period}-day low · no stop orders`],
+      ['Strategy',`Donchian ${r.entry_period}/${r.exit_period} · ATR(${r.atr_period}) × ${r.atr_multiplier} · long-only spot · exit on daily close below the ${r.exit_period}-day low · fixed stop from actual fill using signal ATR; existing trades keep original rules`],
       ['Universe',`${esc(s.active_universe)} · ${esc((s.active_universe_symbols||[]).join(', '))}`],
       ['Risk',`${num(r.risk_per_trade_pct,2)}% of equity per trade · ${esc(r.sizing_rule)} · no fixed position-value cap · available cash only · no daily loss cutoff`],
       ['Funded capital',`${num(r.starting_capital_usdt,2)} USDT`],
@@ -383,11 +391,11 @@ button,input,select{font:inherit}
     $('decisionPrev').disabled=decisionOffset===0;$('decisionNext').disabled=decisionOffset+rows.length>=page.total;
     $('decisionsTable').innerHTML=table([
       ['Decision day',r=>date(r.signal_close_ms)],['Coin',r=>`<b>${esc(r.symbol)}</b>`],['Action',r=>esc(r.action)],
-      ['Execution',r=>esc(r.execution)],['ADX',r=>num(r.payload.adx,2)],['Required ADX',r=>r.payload.adx_threshold==null?'—':`> ${num(r.payload.adx_threshold,2)}`],
+      ['Execution',r=>esc(r.execution)],['ADX',r=>num(r.payload.adx,2)],['Required ADX',r=>r.payload.adx_threshold==null?'—':`${r.payload.adx_inclusive?'≥':'>'} ${num(r.payload.adx_threshold,2)}`],
       ['Reason',r=>`<div class="decision-note">${esc(r.reason)}${r.execution_reason?'<br>'+esc(r.execution_reason):''}</div>`],
       ['1d move',r=>pct(r.outcomes['1']?.return_pct)],['7d move',r=>pct(r.outcomes['7']?.return_pct)],['30d move',r=>pct(r.outcomes['30']?.return_pct)],
       ['30d peak rise',r=>pct(r.outcomes['30']?.mfe_pct)],['30d worst fall',r=>pct(r.outcomes['30']?.mae_pct)],
-      ['Channel exit (net)',r=>pct(r.outcomes.channel_exit?.net_pct)],['Version',r=>esc(r.strategy_version)]
+      ['Channel only (net)',r=>pct(r.outcomes.channel_exit?.net_pct)],['ATR/channel estimate (net)',r=>pct(r.outcomes.strategy_exit?.net_pct)],['Version',r=>esc(r.strategy_version)]
     ],rows);
   }
   async function loadDecisions(offset=0){
@@ -435,6 +443,8 @@ button,input,select{font:inherit}
       exit_period:Number($('setExitPeriod').value),
       adx_period:Number($('setAdxPeriod').value),
       adx_threshold:Number($('setAdxThreshold').value),
+      adx_smoothing:Number($('setAdxSmoothing').value),
+      entry_fee_reserve_pct:Number($('setFeeReserve').value),
       atr_period:Number($('setAtrPeriod').value),
       atr_multiplier:Number($('setAtrMult').value),
       daily_history_bars:Number($('setHistory').value),

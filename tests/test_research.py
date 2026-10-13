@@ -39,8 +39,8 @@ def test_adx_wilder_seed_zero_and_trend():
     assert wilders_adx_series(trend)[27:]==[100.0]*33
 
 
-@pytest.mark.parametrize('adx,expected',[(24.9,False),(25,False),(25.0001,True)])
-def test_adx25_is_strict_and_never_blocks_exits(adx,expected):
+@pytest.mark.parametrize('adx,expected',[(24.9,False),(25,True),(25.0001,True)])
+def test_adx25_is_inclusive_and_never_blocks_exits(adx,expected):
     x=[Candle(i*DAY_MS,100,101,99,100,1,(i+1)*DAY_MS-1) for i in range(60)]
     x.append(Candle(60*DAY_MS,108,115,105,110,1,61*DAY_MS-1))
     with patch('strategy.wilders_adx',return_value=adx):

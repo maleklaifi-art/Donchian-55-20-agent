@@ -26,10 +26,12 @@ def default_universes() -> List[Dict[str, Any]]:
 
 @dataclass
 class RuntimeSettings:
-    settings_revision: int = 6
+    settings_revision: int = 7
+    adx_smoothing: int = 14
+    entry_fee_reserve_pct: float = 0.25
     adx_period: int = 14
     adx_threshold: float = 25.0
-    strategy_version: str = "donchian_55_20_adx25_v1"
+    strategy_version: str = "donchian_55_20_adx25_atr_stop_v2"
     legacy_position_exit_period: int = 20
     research_enabled: bool = True
     research_auto_adopt: bool = True
@@ -72,7 +74,9 @@ class RuntimeSettings:
         data["active_universe_symbols"] = list(active["symbols"]) if active else []
         data["strategy_version"] = self.strategy_version
         data["schedule"] = "Daily at 00:00 UTC"
-        data["sizing_rule"] = "risk % of equity / (2 x ATR)"
+        data["sizing_rule"] = "risk % of equity / frozen ATR stop distance, cash capped incl. entry fee reserve"
+        data["atr_stop_enabled"] = True
+        data["adx_inclusive"] = True
         return data
 
 
@@ -111,13 +115,21 @@ class SettingsStore:
                     if universe["name"].lower() == active_name.lower():
                         universe["symbols"] = list(DEFAULT_UNIVERSE_SYMBOLS)
                 raw["universes"] = universes
+            if previous_revision < 7:
+                # User-requested Pine strategy cutover. Keep funding, universe,
+                # credentials and each existing position's recorded exit rules.
+                raw.update(entry_period=55, exit_period=20, adx_period=14,
+                           adx_smoothing=14, adx_threshold=25.0, atr_period=20,
+                           atr_multiplier=2.0, risk_per_trade_pct=1.0,
+                           entry_fee_reserve_pct=0.25,
+                           strategy_version="donchian_55_20_adx25_atr_stop_v2")
             self._value = self._validated(raw, self._value)
             if previous_revision < 2 and self._value.scan_workers == 8:
                 self._value.scan_workers = 50
             if previous_revision < 3 and self._value.scan_workers in (8, 50):
                 self._value.scan_workers = 100
-            self._value.settings_revision = 6
-            if previous_revision < 6:
+            self._value.settings_revision = 7
+            if previous_revision < 7:
                 self._write(self._value)
         except Exception as exc:
             raise RuntimeError(f"settings file is unreadable: {self.path}: {exc}") from exc
@@ -162,6 +174,8 @@ class SettingsStore:
     def _validated(self, raw: Dict[str, Any], old: RuntimeSettings) -> RuntimeSettings:
         value = RuntimeSettings(**asdict(old))
         value.adx_period = self._number(raw, "adx_period", value.adx_period, 2, 100, True)
+        value.adx_smoothing = self._number(raw, "adx_smoothing", value.adx_smoothing, 1, 100, True)
+        value.entry_fee_reserve_pct = self._number(raw, "entry_fee_reserve_pct", value.entry_fee_reserve_pct, 0, 10)
         value.adx_threshold = self._number(raw, "adx_threshold", value.adx_threshold, 0, 100)
         for key in ("research_enabled", "research_auto_adopt", "pattern_enabled", "explorer_enabled"):
             if key in raw:

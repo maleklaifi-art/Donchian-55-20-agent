@@ -8,12 +8,13 @@ The cloud service runs continuously. Your PC, browser, and home Wi-Fi do not nee
 
 The agent does not use AI discretion to invent trades. It scans independently in the cloud and executes deterministic rules with Testnet execution.
 
-### Strategy — Donchian 55/20 + ADX25 (daily, long-only spot)
+### Strategy — Donchian 55/20 + ADX ≥25 + fixed ATR stop (daily, long-only spot)
 
-- **Entry** — right after `00:00 UTC`, if the just-closed daily close is strictly above the highest high of the previous **55** daily candles (signal day excluded, no lookahead), require Wilder ADX(14) **strictly above 25**, then submit a market BUY within the grace window (default **15 minutes**). Signals outside the window are rejected as stale.
+- **Entry** — right after `00:00 UTC`, if the just-closed daily close is strictly above the highest high of the previous **55** daily candles (signal day excluded, no lookahead), require Wilder ADX(DI14, smoothing14) **at least 25**, then submit a market BUY within the grace window (default **15 minutes**). Signals outside the window are rejected as stale.
 - **Exit** — if a position is held and the just-closed daily close is strictly below the lowest low of the previous **20** daily candles (signal day excluded), submit a market SELL. There is **no grace window** on exits: restart recovery may flatten the position whenever the condition holds.
-- **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. There is **no fixed dollar position cap**. Equity includes current open-position P&L and is bounded by actual Testnet backing. The order uses at most available cash, without an arbitrary reserve. Unrealized gains affect risk sizing but cannot be spent as cash.
-- **No stop orders / no OCO.** Exits happen only through the daily 20-day-low channel exit (legacy positions opened with protective OCO orders are still reconciled by the exit monitor).
+- **Sizing** — ATR(20) by Wilder's smoothing on daily candles. Quantity = `(equity × risk%) / (2 × ATR20)`, with risk% defaulting to **1%**. There is **no fixed dollar position cap**. Equity includes current open-position P&L and is bounded by actual Testnet backing. The order reserves **0.25% for entry fees** by default, caps quantity by available cash and rounds down to exchange LOT_SIZE/MARKET_LOT_SIZE. It submits a fixed base quantity. The current Testnet ask can reduce affordability below the signal-close estimate. Unrealized gains affect risk sizing but cannot be spent as cash.
+- **Fixed ATR stop for new trades** — actual average entry fill minus **2 × signal-candle ATR(20)**. Freeze the ATR distance at the signal, round distance to the nearest exchange tick (at least one tick), then round the absolute stop price to the nearest tick. No trailing or later ATR reset. A native Testnet **STOP_LOSS** market trigger protects the held quantity after base commissions and lot rounding. The first of the ATR stop or daily channel exit closes the trade; no take-profit.
+- **Existing trades** retain their original channel-only or legacy OCO rules. No new stop is added to an already-open trade.
 - Long-only, spot, one open position per symbol, one entry per signal (exactly-once state).
 
 ## Decision tracking
@@ -32,7 +33,7 @@ orders, and trade history are preserved; open positions keep their existing rule
 ## Risk management
 
 - Funded demo capital defaults to **$200 USDT** and is editable in the dashboard. Balance = funded capital + recorded realized P&L; equity also includes open P&L.
-- Risk per trade is a percentage of equity (default **1%**), converted to quantity via `1/(2 × ATR20)`; **2 × ATR is a sizing distance, not a stop-loss order or a maximum possible loss**. The 20-day-low exit may realize losses larger than 1R.
+- Risk per trade is a percentage of equity (default **1%**), converted to quantity via `1/(2 × ATR20)`; **2 × ATR is the fixed stop distance for new trades**, not a maximum possible loss: fees, gaps, latency and slippage can realize losses larger than 1R. Pre-cutover trades retain their original exit rules.
 - Multiple positions are allowed when available demo balance can fund them.
 - No daily loss cutoff. The manual pause, stale-signal checks and duplicate-order protection remain.
 - No leverage.
@@ -57,7 +58,7 @@ The dashboard shows:
 - One editable active coin list (default **Core 19**: BTC, ETH, BNB, SOL, XRP, ADA, AVAX, DOT, LINK, LTC, ATOM, BCH, TRX, NEAR, UNI, XLM, ALGO, VET, FIL): change its name or coins and press SAVE SETTINGS.
 - Optional Telegram notifications.
 
-**STOP NEW TRADES does not close existing positions.** Open positions continue to be flattened by the daily channel exit.
+**STOP NEW TRADES does not close existing positions.** Open positions retain their daily channel exit and any existing native stop; pausing new entries does not cancel protection.
 
 ## Persistent data
 
@@ -139,7 +140,8 @@ Closed-trade USDT P&L is derived from the entry fill and the filled Testnet exit
 - `demo_trader.py` — universe resolution, scanning, Testnet execution, risk manager and state.
 - `strategy.py` — Donchian 55/20 evaluation, Wilder ATR, signal filtering.
 - `runtime_settings.py` — dashboard-editable settings (capital, strategy, universes).
-- `exit_monitor.py` — legacy OCO position reconciliation (new positions use channel exits).
+- `exit_monitor.py` — legacy OCO position reconciliation.
+- `atr_protection.py` — native fixed stops, restart recovery and safe channel/stop coordination.
 - `database.py` — persistent dashboard database.
 - `templates/dashboard.html` — responsive dashboard UI.
 - `Dockerfile` — cloud container build.
@@ -173,3 +175,36 @@ coin but keeps daily exit checks until its position closes; it does not sell imm
 Daily candles are cached beside the position state, fetched from the first available Binance candle, and updated incrementally. Wilder ATR no longer restarts from a moving 120-bar window. “History fetch page size” controls only API pagination, not the ATR calculation; changing it does not tune the strategy. Initial history loading can take longer; no late entry is forced if the grace window expires. Simultaneous entries are processed in configured coin-list order after exits, not network completion order. This deterministic cash-allocation convention is not an optimized ranking.
 
 The written 0.25% per-side cost is a backtest assumption. The agent records actual Testnet commissions, which can differ. A market order is submitted after confirming the daily close; exchange latency, lot rounding and actual fills prevent a guarantee of the exact historical next-open price. A confirmed channel exit is retained through partial fills or outages and retried by position synchronization; realized trade P&L is finalized only once the sellable remainder is closed.
+
+
+### Uploaded Pine strategy alignment and execution limits
+
+The revision-7 migration selects 55/20, DI14/ADX14 ≥25, ATR20 ×2, 1% risk and
+0.25% entry-fee reserve once. It preserves funded capital, the saved coin list,
+credentials, trade history and existing position rules. Later manual settings
+remain editable and survive restarts. Pattern learning and exploration stay removed.
+
+Signals use completed Binance production daily candles at 00:00 UTC. Actual buys,
+sells and native stop triggers use Binance Spot Testnet. A market order cannot
+promise TradingView's exact next-open fill or its OHLC-emulated stop price. The stop
+is submitted as soon as the actual buy fill/received quantity is known; there is a
+brief non-atomic interval before the exchange accepts it. Accepted native stops
+continue at the exchange even while this app is offline. Unsupported STOP_LOSS
+symbols are rejected before entry. A definitely rejected stop triggers an emergency
+market exit; uncertain submissions block new entries and are queried by their
+persisted client IDs without blindly submitting duplicate orders. Unknown states
+may require manual reconciliation if the exchange cannot resolve them.
+
+Before a daily channel sell, the app cancels and reconciles the protective stop.
+If the stop wins the race, its actual fill is accounted once; any verified remaining
+quantity is sold separately. Lost buy responses are journaled and recovered before
+new entries. Actual fees determine P&L; the 0.25% reserve is not a fabricated charge.
+
+Dashboard entry quantities/values/stops are independent estimates at signal-close
+prices. Actual orders share cash in configured coin-list order. Held-trade stops
+use recorded fills and never follow subsequent ATR values. Skipped-signal
+ATR/channel outcomes are separately labelled daily-OHLC estimates without tick
+rounding; the old channel-only diagnostic remains available and historical records
+are not rewritten into the new strategy.
+
+Official native order contract: https://developers.binance.com/docs/binance-spot-api-docs/rest-api/trading-endpoints

@@ -223,6 +223,7 @@ class CloudDemoEngine:
         self.cfg.demo_equity_cap_usdt = settings.starting_capital_usdt
         return DonchianConfig(
             adx_period=settings.adx_period, adx_threshold=settings.adx_threshold,
+            adx_smoothing=settings.adx_smoothing, entry_fee_reserve_pct=settings.entry_fee_reserve_pct,
             strategy_version=settings.strategy_version,
             entry_period=settings.entry_period,
             exit_period=settings.exit_period,
@@ -300,6 +301,8 @@ class CloudDemoEngine:
         """Exits first (frees capital), then entries, all in one state batch."""
         with self.state_lock:
             state = load_state(self.cfg.state_file)
+            # Reconcile native fills before valuing equity or sending another order.
+            sync_positions(self.exec_client, state, self.logger, self.cfg, self.market, self.rules)
             self.db.backfill_state(state)
             for row in snapshot.get("exit_signals", []):
                 if self.storage_error:
@@ -309,7 +312,6 @@ class CloudDemoEngine:
                 except Exception as exc:
                     self.logger.emit("EXIT_ERROR", symbol=row.get("symbol"), signal_key=f"{row.get('symbol')}:{row.get('signal_close_ms')}", error=str(exc))
             # Exits can realize gains/losses and release cash in this same batch.
-            realized = self.db.stats()["realized_pnl_usdt"]
             for row in snapshot.get("signals", []):
                 sig = Signal(**row)
                 if self.storage_error:
@@ -318,7 +320,7 @@ class CloudDemoEngine:
                 try:
                     place_signal(
                         sig, self.market, self.exec_client, self.rules, state, self.cfg, self.logger,
-                        realized_pnl_usdt=realized,
+                        realized_pnl_usdt=self.db.stats()["realized_pnl_usdt"],
                     )
                 except Exception as exc:
                     self.logger.emit("ENTRY_ERROR", symbol=sig.symbol, signal_key=f"{sig.symbol}:{sig.signal_close_ms}", error=str(exc))
@@ -343,7 +345,7 @@ class CloudDemoEngine:
                     f"55-day high: {signal['entry_channel']:.12g}\n"
                     f"20-day low: {signal['exit_channel']:.12g}\n"
                     f"ATR({settings.atr_period}): {signal['atr']:.12g}\n"
-                    f"Sizing distance: {signal['stop_distance']:.12g} (2 x ATR)"
+                    f"Fixed stop: actual fill minus {signal['stop_distance']:.12g} (signal ATR; rounded to exchange tick)"
                 )
                 response = requests.post(
                     f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
@@ -428,6 +430,8 @@ class CloudDemoEngine:
             t["atr"] = stored.get("atr", t.get("atr"))
             t["strategy_version"] = stored.get("strategy_version", "legacy_donchian")
             t["exit_period"] = stored.get("exit_period", self.settings_store.legacy_exit_period)
+            for field in ("atr_stop_enabled", "fixed_stop_price", "fixed_stop_distance", "native_stop_state", "native_stop_error"):
+                t[field] = stored.get(field)
             exit_channel = t.get("exit_channel")
             t["distance_to_exit_pct"] = ((px / float(exit_channel)) - 1.0) * 100.0 if px > 0 and exit_channel else None
             unrealized += t["unrealized_pnl_usdt"]
@@ -461,19 +465,47 @@ class CloudDemoEngine:
                 "last_position_sync_error": self.last_position_sync_error,
                 "last_price_refresh": self.last_price_refresh,
                 "testnet_free_usdt": self.testnet_free_usdt,
+                "pending_entry_symbols": [p["signal"]["symbol"] for p in load_state(self.cfg.state_file).get("pending_entries", {}).values()],
                 "history_persistent": self.history_persistent,
                 "storage_error": self.storage_error,
                 "next_scan_at_ms": self.next_scan_at_ms,
             }
+        from demo_trader import nearest_tick
+        from atr_protection import market_quantity
+        entry_signals = []
+        for original in self.last_scan_snapshot.get("signals", []):
+            row = dict(original)
+            rule = self.rules.get(row["symbol"])
+            if rule and row.get("atr_stop_enabled"):
+                distance = float(max(rule.tick_size, nearest_tick(row['stop_distance'], rule.tick_size)))
+                equity = max(0.0, stats['estimated_demo_equity_usdt'])
+                if raw_equity is not None:
+                    equity = min(equity, raw_equity)
+                cash = stats['available_demo_cash_usdt']
+                if self.testnet_free_usdt is not None:
+                    cash = min(cash, self.testnet_free_usdt)
+                price = row['entry']
+                qty = market_quantity(min(equity*settings.risk_per_trade_pct/100/distance,
+                    min(equity,cash)/(price*(1+settings.entry_fee_reserve_pct/100))),rule) if 0 < distance < price else 0
+                if qty < max(rule.min_qty,rule.market_min_qty) or float(qty)*price < float(rule.min_notional):
+                    qty = 0
+                row.update(stop_distance=distance, estimated_quantity=float(qty),
+                           estimated_value=float(qty)*price, estimated_stop=price-distance)
+            entry_signals.append(row)
         return {
             "meta": meta,
             "risk": {
                 "risk_per_trade_pct": settings.risk_per_trade_pct,
-                "sizing_rule": "risk % of equity / (2 x ATR)",
+                "sizing_rule": settings.public_dict()["sizing_rule"],
+                "atr_stop_enabled": True,
+                "adx_threshold": settings.adx_threshold,
+                "adx_period": settings.adx_period,
+                "adx_smoothing": settings.adx_smoothing,
+                "entry_fee_reserve_pct": settings.entry_fee_reserve_pct,
                 # Keep the response key for existing clients; null means uncapped.
                 "max_position_notional_usdt": None,
                 "equity_basis": "funded balance plus open P&L, bounded by Testnet backing",
-                "cash_reserve_pct": 0.0,
+                "cash_reserve_pct": settings.entry_fee_reserve_pct,
                 "daily_loss_limit_r": None,
                 "atr_history": "continuous from listing",
                 "fee_accounting": "actual fees for new trades; legacy records unchanged",
@@ -490,7 +522,7 @@ class CloudDemoEngine:
             "open_trades": open_trades,
             "closed_trades": self.db.closed_trades(100),
             "rejected_signals": self.db.signals("REJECTED", 60),
-            "entry_signals": self.last_scan_snapshot.get("signals", []),
+            "entry_signals": entry_signals,
             "exit_signals": self.last_scan_snapshot.get("exit_signals", []),
             "no_action": self.last_scan_snapshot.get("filtered", []),
             "recent_signals": self.db.signals(None, 60),

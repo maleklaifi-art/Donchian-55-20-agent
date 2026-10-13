@@ -58,8 +58,8 @@ def test_outcomes_continue_without_research_and_retry_missing_coins(tmp_path):
 def test_recorded_configuration_identity_matches_existing_decisions():
     from research_engine import config_for as original_config, fingerprint as original_fingerprint
     settings = RuntimeSettings()
-    assert config_for(settings)==original_config(settings)
-    assert fingerprint(config_for(settings))==original_fingerprint(original_config(settings))
+    assert {k:v for k,v in config_for(settings).items() if k!='execution'}==original_config(settings)
+    assert fingerprint(config_for(settings))!=original_fingerprint(original_config(settings))
 
 
 def test_startup_preserves_saved_state_and_starts_only_trading_workers(tmp_path):

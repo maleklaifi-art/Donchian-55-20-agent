@@ -370,10 +370,10 @@ def test_exit_is_rejected_when_the_signal_candle_is_stale(tmp_path):
     assert logger.emit.call_args.kwargs["reason"] == "stale exit signal"
 
 
-def test_no_stop_or_protective_orders_are_ever_created(setup):
+def test_legacy_channel_only_signal_does_not_acquire_a_new_stop(setup):
     exchange = Exchange()
     enter(signal(), exchange, setup)
     assert exchange.sells == []
     assert len(setup[2]["open_positions"]) == 1
-    # The real execution client has no OCO/stop helper at all.
+    # Legacy signals preserve their channel-only behavior.
     assert not hasattr(BinanceTestnetClient, "sell_oco_market_triggers")

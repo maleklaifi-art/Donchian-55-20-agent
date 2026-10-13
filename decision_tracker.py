@@ -13,6 +13,8 @@ def config_for(settings):
     active = next(u for u in settings.universes if u['name'].lower()==settings.active_universe.lower())
     return {'rules': {k:getattr(settings,k) for k in ('entry_period','exit_period','atr_period',
                       'atr_multiplier','adx_period','adx_threshold')},
+            'execution':{'adx_inclusive':True, 'adx_smoothing':settings.adx_smoothing,
+                         'atr_stop_enabled':True, 'entry_fee_reserve_pct':settings.entry_fee_reserve_pct},
             'risk_pct':settings.risk_per_trade_pct, 'capital':settings.starting_capital_usdt,
             'symbols':list(active['symbols']),
             'cost':{'fee':settings.research_fee_bps/10000,'slip':settings.research_slippage_bps/10000,

@@ -49,7 +49,7 @@ assert.match(output, /Exit channel \(20d low\)<\/span><b>55,000<\/b>/);
 assert.match(output, /Entry channel \(at entry\)<\/span><b>59,000<\/b>/);
 assert.match(output, /Distance to exit channel/);
 assert.match(output, /ATR at entry<\/span><b>900<\/b>/);
-assert.match(output, /No stop order/);
+assert.match(output, /Original exit rules/);
 
 context.renderClosed([{symbol: 'ETHUSDT', outcome: 'CHANNEL_EXIT', entry_price: 2400, exit_price: 2300,
   quantity: 0.5, pnl_usdt: -50, realized_r: -1, opened_at: '2026-09-20T00:00:00Z',
@@ -63,7 +63,7 @@ context.renderEntrySignals([{symbol: 'SOLUSDT', close_time_utc: '2026-10-01T00:0
   entry_channel: 155, exit_channel: 140, atr: 6, stop_distance: 12, universe: 'Core 10'}]);
 output = elements.get('entryPanel').innerHTML;
 assert.match(output, /55-day high/);
-assert.match(output, /Sizing distance \(2×ATR\)/);
+assert.match(output, /Frozen stop distance/);
 
 context.renderExitSignals([{symbol: 'XRPUSDT', close_time_utc: '2026-10-01T00:00:00Z', entry: 2.4,
   entry_channel: 2.6, exit_channel: 2.5, atr: 0.1, stop_distance: 0.2, universe: 'Core 10'}]);
@@ -170,3 +170,13 @@ assert.equal(elements.get('decisionNext').disabled,true);
 assert.doesNotMatch(html,/id="(?:patternsTitle|researchTitle|explorerMode|setResearchAdopt|setPatternEnabled|setExplorerEnabled)"/);
 assert.ok(!('pattern_enabled' in context.settingsPayload()));
 console.log('Decision outcomes, removed sections, empty state and escaping checks passed.');
+context.renderOpen([{...openRow,atr_stop_enabled:true,fixed_stop_price:58200,native_stop_state:'NEW',strategy_version:'atr_v2'}]);
+assert.match(elements.get('openCards').innerHTML,/58,200/);
+assert.match(elements.get('openCards').innerHTML,/Fixed ATR stop · not trailing/);
+assert.doesNotMatch(elements.get('openCards').innerHTML,/Original exit rules/);
+context.renderClosed([{symbol:'BTCUSDT',outcome:'ATR_STOP',pnl_usdt:-2}]);
+assert.match(elements.get('closedPanel').innerHTML,/ATR stop/);
+context.renderEntrySignals([{...openRow,estimated_quantity:.01,estimated_value:600,estimated_stop:58200}]);
+assert.match(elements.get('entryPanel').innerHTML,/Est. new quantity/);
+assert.match(elements.get('entryPanel').innerHTML,/58,200/);
+console.log('Fixed stops, actual-stop exit labels and entry sizing estimates passed.');
